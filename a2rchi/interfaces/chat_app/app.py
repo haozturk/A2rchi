@@ -349,7 +349,6 @@ class ChatWrapper:
             timestamps['query_convo_history_ts'],
             timestamps['chain_finished_ts'],
             timestamps['a2rchi_message_ts'],
-            timestamps.get('similarity_search_ts'),  # Optional timestamp
             timestamps['insert_convo_ts'],
             timestamps['finish_call_ts'],
             timestamps['server_response_msg_ts'],

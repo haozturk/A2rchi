@@ -39,11 +39,10 @@ INSERT INTO timing (
     query_convo_history_ts,
     chain_finished_ts,
     a2rchi_message_ts,
-    similarity_search_ts,
     insert_convo_ts,
     finish_call_ts,
     server_response_msg_ts,
     msg_duration
 )
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
 """
