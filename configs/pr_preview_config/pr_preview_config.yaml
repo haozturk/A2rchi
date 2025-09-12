@@ -1,0 +1,52 @@
+# stored in file example_conf.yaml
+name: pr_preview_config
+
+global:
+  TRAINED_ON: "Dummy data for preview"
+
+utils:
+  embeddings:
+    EMBEDDING_NAME: HuggingFaceEmbeddings
+    EMBEDDING_CLASS_MAP:
+      HuggingFaceEmbeddings:
+        similarity_score_reference: 10
+
+  sso:
+    ENABLED: True
+    SSO_CLASS: CERNSSOScraper
+    SSO_CLASS_MAP:
+      CERNSSOScraper:
+        kwargs:
+          headless: True # headless mode for scraping, as it is run in a container
+          max_depth: 2 # max depth for crawling from starting URL
+  data_manager:
+    use_hybrid_search: True
+    bm25_weight: 0.6
+    semantic_weight: 0.4
+    bm25:
+      k1: 0.5
+      b: 0.75
+
+    input_lists:
+       - configs/pr_preview_config/test_links.list
+
+a2rchi:
+  pipelines: ['QAPipeline']
+  pipeline_map:
+    QAPipeline:
+      prompts:
+        required:
+          condense_prompt: configs/prompts/condense.prompt
+          chat_prompt: configs/prompts/submit.prompt
+      models:
+        required:
+          #condense_model: OpenAIGPT4
+          #chat_model: OpenAIGPT4
+          condense_model: DumbLLM
+          chat_model: DumbLLM
+
+interfaces:
+  chat_app:
+    EXTERNAL_PORT: 443
+    HOSTNAME: vocms275.cern.ch
+    enable_debug_chroma_endpoints : True
