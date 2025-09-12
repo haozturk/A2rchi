@@ -15,25 +15,28 @@ info() { echo "[smoke] $*"; }
 info "Waiting for ${BASE_URL} to be ready (timeout ${TIMEOUT}s)..."
 start_ts=$(date +%s)
 while true; do
-  if curl -fsS "${BASE_URL}/healthz" >/dev/null 2>&1; then
+  if curl -fsS "${BASE_URL}/api/health" >/dev/null 2>&1; then
     info "Health OK"
     break
   fi
   now=$(date +%s)
   if (( now - start_ts > TIMEOUT )); then
-    echo "Timed out waiting for ${BASE_URL}/healthz" >&2
+    echo "Timed out waiting for ${BASE_URL}/api/health" >&2
     exit 1
   fi
   sleep 2
 done
 
 set -x
-curl -fsS "${BASE_URL}/healthz" | head -c 500
-# Adjust the endpoint and body to your actual API
-if curl -fsS -X POST "${BASE_URL}/api/chat" \
+curl -fsS "${BASE_URL}/api/health" | head -c 500
+# Test basic connectivity first
+curl -fsS "${BASE_URL}/" | head -c 200
+
+# Test chat endpoint with working payload format
+if curl -fsS -X POST "${BASE_URL}/api/get_chat_response" \
   -H "Content-Type: application/json" \
-  -d '{"message":"hello"}' | head -c 500; then
-  :
+  -d '{"last_message":[["User","hello"]],"conversation_id":null,"is_refresh":false,"client_sent_msg_ts":'$(date +%s000)',"client_timeout":300000}' | head -c 500; then
+  info "Chat endpoint test passed"
 else
   echo "Chat endpoint check failed" >&2
   exit 1
