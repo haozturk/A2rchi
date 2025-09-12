@@ -35,7 +35,7 @@ jobs:
         run: |
           mkdir -p configs/ci
           if [ ! -f configs/ci/ci_config.yaml ]; then
-            cp configs/comp_ops/compops_config.yaml configs/ci/ci_config.yaml
+            cp configs/pr_preview_config/pr_preview_config.yaml configs/ci/ci_config.yaml
           fi
 
       - name: Create PR deployment
