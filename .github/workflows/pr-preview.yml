@@ -90,7 +90,7 @@ jobs:
           CHAT_CONTAINER="${{ steps.container.outputs.name }}"
           echo "Waiting for service in $CHAT_CONTAINER to be ready"
           tries=0
-          until curl -fsS http://localhost:7861/healthz >/dev/null 2>&1 || [ $tries -gt 90 ]; do
+          until curl -fsS http://localhost:7861/api/health >/dev/null 2>&1 || [ $tries -gt 90 ]; do
             tries=$((tries+1))
             echo "Attempt $tries/90 - checking if container is running..."
             if ! docker ps | grep -q "$CHAT_CONTAINER"; then
