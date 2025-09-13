@@ -58,7 +58,7 @@ jobs:
           echo "Env file contents:"
           cat .env
           echo "Running a2rchi create command..."
-          if a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --env-file .env; then
+          if a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --services chatbot --env-file .env; then
             echo "a2rchi create succeeded"
           else
             echo "a2rchi create failed with exit code $?"
