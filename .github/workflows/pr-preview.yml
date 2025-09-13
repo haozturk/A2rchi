@@ -50,7 +50,7 @@ jobs:
         id: create
         shell: bash
         run: |
-          NAME="chatbotmanual-${{ github.run_id }}"
+          NAME="manual-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "Creating deployment with name: $NAME"
           echo "Config file contents:"
@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           NAME="${{ steps.create.outputs.name }}"
-          CHAT_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "^chat-${NAME}$|^chat-compops-${NAME}$|^chat-compops-a2rchi$") || true
+          CHAT_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "^chatbot-${NAME}$") || true
           if [ -z "$CHAT_CONTAINER" ]; then
             echo "No chat container found. Listing containers:" >&2
             docker ps -a
