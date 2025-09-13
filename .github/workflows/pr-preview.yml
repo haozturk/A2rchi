@@ -50,7 +50,7 @@ jobs:
         id: create
         shell: bash
         run: |
-          NAME="manual-${{ github.run_id }}"
+          NAME="chatbotmanual-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "Creating deployment with name: $NAME"
           echo "Config file contents:"
