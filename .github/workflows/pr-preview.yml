@@ -72,28 +72,44 @@ jobs:
         shell: bash
         run: |
           NAME="${{ steps.create.outputs.name }}"
+          echo "Looking for container with name pattern: chatbot-${NAME}"
           CHAT_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "^chatbot-${NAME}$") || true
           if [ -z "$CHAT_CONTAINER" ]; then
-            echo "No chat container found. Listing containers:" >&2
+            echo "No running chat container found. Listing all containers:" >&2
             docker ps -a
+            echo "Checking for any containers with 'chatbot' in the name:"
+            docker ps -a --format '{{.Names}}' | grep chatbot || echo "No chatbot containers found"
             exit 1
           fi
+          echo "Found chat container: $CHAT_CONTAINER"
           echo "name=$CHAT_CONTAINER" >> "$GITHUB_OUTPUT"
 
       - name: Wait for readiness
         shell: bash
         run: |
           CHAT_CONTAINER="${{ steps.container.outputs.name }}"
-          echo "Waiting for service in $CHAT_CONTAINER to open port 7861"
+          echo "Waiting for service in $CHAT_CONTAINER to be ready"
           tries=0
-          until docker exec "$CHAT_CONTAINER" bash -lc "ss -lnt | grep -q ':7861 '" || [ $tries -gt 90 ]; do
+          until curl -fsS http://localhost:7861/healthz >/dev/null 2>&1 || [ $tries -gt 90 ]; do
             tries=$((tries+1))
+            echo "Attempt $tries/90 - checking if container is running..."
+            if ! docker ps | grep -q "$CHAT_CONTAINER"; then
+              echo "Container $CHAT_CONTAINER is not running. Checking status..."
+              docker ps -a | grep "$CHAT_CONTAINER"
+              echo "Container logs:"
+              docker logs "$CHAT_CONTAINER" --tail 20
+            fi
             sleep 2
           done
           if [ $tries -gt 90 ]; then
-            echo "Service did not open port 7861 in time" >&2
+            echo "Service did not become ready in time" >&2
+            echo "Final container status:"
+            docker ps -a | grep "$CHAT_CONTAINER"
+            echo "Final container logs:"
+            docker logs "$CHAT_CONTAINER" --tail 50
             exit 1
           fi
+          echo "Service is ready!"
 
       - name: Make smoke script executable
         run: chmod +x tests/smoke/smoke.sh
@@ -107,10 +123,12 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          echo "Containers:"
+          echo "=== All containers ==="
           docker ps -a
-          echo "==== Chat container logs (tail) ===="
-          docker ps --format '{{.Names}}' | grep -E '^chat-|^chat-compops-' | xargs -I{} sh -c 'echo "---- {} ----"; docker logs --tail 500 {} || true'
+          echo "=== Chatbot container logs ==="
+          docker ps -a --format '{{.Names}}' | grep chatbot | xargs -I{} sh -c 'echo "---- {} ----"; docker logs --tail 100 {} || true'
+          echo "=== All container logs (last 50 lines each) ==="
+          docker ps -a --format '{{.Names}}' | xargs -I{} sh -c 'echo "---- {} ----"; docker logs --tail 50 {} || true'
 
       - name: Cleanup deployment
         if: always()
