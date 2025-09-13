@@ -34,9 +34,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p configs/ci
-          if [ ! -f configs/ci/ci_config.yaml ]; then
-            cp configs/pr_preview_config/pr_preview_config.yaml configs/ci/ci_config.yaml
-          fi
+          echo "Copying config file..."
+          cp configs/pr_preview_config/pr_preview_config.yaml configs/ci/ci_config.yaml
+          echo "Config copied successfully"
+          ls -la configs/ci/
 
       - name: Create .env file for PG_PASSWORD with random password
         shell: bash
@@ -51,7 +52,20 @@ jobs:
         run: |
           NAME="manual-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --env-file .env
+          echo "Creating deployment with name: $NAME"
+          echo "Config file contents:"
+          cat configs/ci/ci_config.yaml
+          echo "Env file contents:"
+          cat .env
+          echo "Running a2rchi create command..."
+          if a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --env-file .env; then
+            echo "a2rchi create succeeded"
+          else
+            echo "a2rchi create failed with exit code $?"
+            echo "Checking if any containers were created..."
+            docker ps -a
+            exit 1
+          fi
 
       - name: Find chat container
         id: container
