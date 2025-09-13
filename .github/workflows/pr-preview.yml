@@ -67,6 +67,32 @@ jobs:
             exit 1
           fi
 
+      - name: Wait for ChromaDB to be ready
+        shell: bash
+        run: |
+          echo "Waiting for ChromaDB to be ready..."
+          tries=0
+          until curl -fsS http://localhost:8000/api/v1/heartbeat >/dev/null 2>&1 || [ $tries -gt 30 ]; do
+            tries=$((tries+1))
+            echo "Attempt $tries/30 - waiting for ChromaDB..."
+            sleep 2
+          done
+          if [ $tries -gt 30 ]; then
+            echo "ChromaDB did not become ready in time" >&2
+            exit 1
+          fi
+          echo "ChromaDB is ready!"
+
+      - name: Debug container networking
+        shell: bash
+        run: |
+          echo "=== Docker networks ==="
+          docker network ls
+          echo "=== Container network details ==="
+          docker ps --format "table {{.Names}}\t{{.Networks}}"
+          echo "=== Testing connectivity from host ==="
+          curl -fsS http://localhost:8000/api/v1/heartbeat || echo "ChromaDB not accessible from host"
+
       - name: Find chat container
         id: container
         shell: bash
