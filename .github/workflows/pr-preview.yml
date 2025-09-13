@@ -38,13 +38,20 @@ jobs:
             cp configs/pr_preview_config/pr_preview_config.yaml configs/ci/ci_config.yaml
           fi
 
+      - name: Create .env file for PG_PASSWORD with random password
+        shell: bash
+        run: |
+          cat > .env << EOF
+          PG_PASSWORD=$(openssl rand -base64 32)
+          EOF
+
       - name: Create PR deployment
         id: create
         shell: bash
         run: |
           NAME="manual-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --hostmode True
+          a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --hostmode True --env-file .env
 
       - name: Find chat container
         id: container

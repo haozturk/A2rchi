@@ -4,13 +4,24 @@ name: pr_preview_config
 global:
   TRAINED_ON: "Dummy data for preview"
 
-utils:
-  embeddings:
-    EMBEDDING_NAME: HuggingFaceEmbeddings
-    EMBEDDING_CLASS_MAP:
-      HuggingFaceEmbeddings:
-        similarity_score_reference: 10
+data_manager:
+  embedding_name: HuggingFaceEmbeddings
+  embedding_class_map:
+    HuggingFaceEmbeddings:
+      class: HuggingFaceEmbeddings
+      kwargs:
+        model_name: sentence-transformers/all-MiniLM-L6-v2
+        model_kwargs:
+          device: cpu
+        encode_kwargs:
+          normalize_embeddings: true
+      similarity_score_reference: 10
+  chromadb_host: localhost  # Override default 'chromadb' for local testing
+  use_hybrid_search: true
+  input_lists:
+    - configs/pr_preview_config/test_links.list
 
+utils:
   sso:
     ENABLED: True
     SSO_CLASS: CERNSSOScraper
@@ -19,16 +30,6 @@ utils:
         kwargs:
           headless: True # headless mode for scraping, as it is run in a container
           max_depth: 2 # max depth for crawling from starting URL
-  data_manager:
-    use_hybrid_search: True
-    bm25_weight: 0.6
-    semantic_weight: 0.4
-    bm25:
-      k1: 0.5
-      b: 0.75
-
-    input_lists:
-       - configs/pr_preview_config/test_links.list
 
 a2rchi:
   pipelines: ['QAPipeline']
