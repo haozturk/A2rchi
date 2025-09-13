@@ -51,7 +51,7 @@ jobs:
         run: |
           NAME="manual-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --hostmode True --env-file .env
+          a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --env-file .env
 
       - name: Find chat container
         id: container
