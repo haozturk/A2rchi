@@ -1,4 +1,3 @@
-# stored in file example_conf.yaml
 name: pr_preview_config
 
 global:
@@ -45,9 +44,3 @@ a2rchi:
           #chat_model: OpenAIGPT4
           condense_model: DumbLLM
           chat_model: DumbLLM
-
-interfaces:
-  chat_app:
-    EXTERNAL_PORT: 443
-    HOSTNAME: vocms275.cern.ch
-    enable_debug_chroma_endpoints : True
