@@ -31,82 +31,33 @@ jobs:
           pip install ".[all]" || pip install .
 
       - name: Prepare CI config
-        shell: bash
         run: |
           mkdir -p configs/ci
-          echo "Copying config file..."
           cp configs/pr_preview_config/pr_preview_config.yaml configs/ci/ci_config.yaml
-          echo "Config copied successfully"
-          ls -la configs/ci/
 
       - name: Create .env file for PG_PASSWORD with random password
-        shell: bash
         run: |
-          cat > .env << EOF
-          PG_PASSWORD=$(openssl rand -base64 32)
-          EOF
+          echo "PG_PASSWORD=$(openssl rand -base64 32)" > .env
 
       - name: Create PR deployment
         id: create
-        shell: bash
         run: |
           NAME="manual-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Creating deployment with name: $NAME"
-          echo "Config file contents:"
-          cat configs/ci/ci_config.yaml
-          echo "Env file contents:"
-          cat .env
-          echo "Running a2rchi create command..."
-          if a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --hostmode --services chatbot --env-file .env; then
-            echo "a2rchi create succeeded"
-          else
-            echo "a2rchi create failed with exit code $?"
-            echo "Checking if any containers were created..."
-            docker ps -a
-            exit 1
-          fi
+          a2rchi create --name "$NAME" --config configs/ci/ci_config.yaml -v 4 --hostmode --services chatbot --env-file .env
 
-      - name: Find chat container
-        id: container
-        shell: bash
+      - name: Wait for service readiness
         run: |
-          NAME="${{ steps.create.outputs.name }}"
-          echo "Looking for container with name pattern: chatbot-${NAME}"
-          CHAT_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E "^chatbot-${NAME}$") || true
-          if [ -z "$CHAT_CONTAINER" ]; then
-            echo "No running chat container found. Listing all containers:" >&2
-            docker ps -a
-            echo "Checking for any containers with 'chatbot' in the name:"
-            docker ps -a --format '{{.Names}}' | grep chatbot || echo "No chatbot containers found"
-            exit 1
-          fi
-          echo "Found chat container: $CHAT_CONTAINER"
-          echo "name=$CHAT_CONTAINER" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for readiness
-        shell: bash
-        run: |
-          CHAT_CONTAINER="${{ steps.container.outputs.name }}"
-          echo "Waiting for service in $CHAT_CONTAINER to be ready"
+          echo "Waiting for service to be ready..."
           tries=0
-          until curl -fsS http://localhost:7861/api/health >/dev/null 2>&1 || [ $tries -gt 90 ]; do
+          until curl -fsS http://localhost:7861/api/health >/dev/null 2>&1 || [ $tries -gt 60 ]; do
             tries=$((tries+1))
-            echo "Attempt $tries/90 - checking if container is running..."
-            if ! docker ps | grep -q "$CHAT_CONTAINER"; then
-              echo "Container $CHAT_CONTAINER is not running. Checking status..."
-              docker ps -a | grep "$CHAT_CONTAINER"
-              echo "Container logs:"
-              docker logs "$CHAT_CONTAINER" --tail 20
-            fi
+            echo "Attempt $tries/60..."
             sleep 2
           done
-          if [ $tries -gt 90 ]; then
+          if [ $tries -gt 60 ]; then
             echo "Service did not become ready in time" >&2
-            echo "Final container status:"
-            docker ps -a | grep "$CHAT_CONTAINER"
-            echo "Final container logs:"
-            docker logs "$CHAT_CONTAINER" --tail 50
+            docker ps -a
             exit 1
           fi
           echo "Service is ready!"
@@ -121,13 +72,10 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        shell: bash
         run: |
-          echo "=== All containers ==="
+          echo "=== Container status ==="
           docker ps -a
-          echo "=== Chatbot container logs ==="
-          docker ps -a --format '{{.Names}}' | grep chatbot | xargs -I{} sh -c 'echo "---- {} ----"; docker logs --tail 100 {} || true'
-          echo "=== All container logs (last 50 lines each) ==="
+          echo "=== Container logs ==="
           docker ps -a --format '{{.Names}}' | xargs -I{} sh -c 'echo "---- {} ----"; docker logs --tail 50 {} || true'
 
       - name: Cleanup deployment
