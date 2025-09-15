@@ -1,10 +1,11 @@
 name: PR Preview
 
 on:
-  workflow_dispatch: {}
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 concurrency:
-  group: preview-${{ github.ref }}
+  group: pr-preview-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
