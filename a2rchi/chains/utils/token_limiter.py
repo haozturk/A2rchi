@@ -32,7 +32,7 @@ class TokenLimiter:
             large_msg_fraction: Fraction of budget above which a single history
                                 message is considered "very large".
         """
-        self.llm = llm
+        #self.llm = llm
         self.reserved_tokens = reserved_tokens
         self.prompt_tokens = self.safe_token_count(prompt.format(**{v: "" for v in prompt.input_variables})) # TODO fix
         self.max_tokens = self.get_max_tokens(max_tokens)
