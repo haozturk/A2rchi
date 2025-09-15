@@ -24,6 +24,10 @@ a2rchi:
   pipelines: ['QAPipeline']
   pipeline_map:
     QAPipeline:
+      prompts:
+        required:
+          condense_prompt: configs/prompts/condense.prompt
+          chat_prompt: configs/prompts/submit.prompt
       models:
         required:
           condense_model: DumbLLM
