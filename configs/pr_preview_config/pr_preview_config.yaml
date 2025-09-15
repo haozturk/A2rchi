@@ -15,32 +15,16 @@ data_manager:
         encode_kwargs:
           normalize_embeddings: true
       similarity_score_reference: 10
-  chromadb_host: localhost  # Override default 'chromadb' for local testing
+  chromadb_host: localhost  
   use_hybrid_search: true
   input_lists:
     - configs/pr_preview_config/test_links.list
-
-utils:
-  sso:
-    ENABLED: True
-    SSO_CLASS: CERNSSOScraper
-    SSO_CLASS_MAP:
-      CERNSSOScraper:
-        kwargs:
-          headless: True # headless mode for scraping, as it is run in a container
-          max_depth: 2 # max depth for crawling from starting URL
 
 a2rchi:
   pipelines: ['QAPipeline']
   pipeline_map:
     QAPipeline:
-      prompts:
-        required:
-          condense_prompt: configs/prompts/condense.prompt
-          chat_prompt: configs/prompts/submit.prompt
       models:
         required:
-          #condense_model: OpenAIGPT4
-          #chat_model: OpenAIGPT4
           condense_model: DumbLLM
           chat_model: DumbLLM
