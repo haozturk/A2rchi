@@ -2,7 +2,7 @@ import jira
 import os
 from typing import Iterator, Optional
 
-from a2rchi.utils.config_loader import load_utils_config
+from a2rchi.utils.config_loader import load_data_manager_config
 from a2rchi.utils.env import read_secret
 from a2rchi.utils.anonymizer import Anonymizer
 from a2rchi.utils.logging import get_logger
@@ -12,9 +12,10 @@ logger = get_logger(__name__)
 class JiraClient():
     def __init__(self) -> None:
         try:
-            self.jira_config = load_utils_config()["jira"]
-            self.jira_url = self.jira_config["url"]
-            self.jira_projects = self.jira_config["projects"]
+            dm_config = load_data_manager_config()
+            self.jira_config = dm_config.get("sources", {}).get("jira", {})
+            self.jira_url = self.jira_config.get("url")
+            self.jira_projects = self.jira_config.get("projects")
 
             if not self.jira_url or not self.jira_projects:
                 logger.info("JIRA configs couldn't be found. A2rchi will skip data fetching from JIRA")

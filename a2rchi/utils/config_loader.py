@@ -48,12 +48,20 @@ def load_config(map: bool = False, name: str = None):
             config["data_manager"]["embedding_class_map"][model]["class"] = EMBEDDING_MAPPING[model]
 
         # change the SSO class parameter from a string to an actual class
-        if "sso" in config["utils"] and config["utils"]["sso"].get("enabled", False):
-            SSO_MAPPING = {
-                "CERNSSOScraper": CERNSSOScraper,
-            }
-            for sso_class in config["utils"]["sso"]["sso_class_map"].keys():
-                config["utils"]["sso"]["sso_class_map"][sso_class]["class"] = SSO_MAPPING[sso_class]
+        # Check both utils.sso and data_manager.sources.sso
+        SSO_MAPPING = {
+            "CERNSSOScraper": CERNSSOScraper,
+        }
+        
+        if "utils" in config and "sso" in config["utils"] and config["utils"]["sso"].get("enabled", False):
+            if "sso_class_map" in config["utils"]["sso"]:
+                for sso_class in config["utils"]["sso"]["sso_class_map"].keys():
+                    config["utils"]["sso"]["sso_class_map"][sso_class]["class"] = SSO_MAPPING[sso_class]
+        
+        if "data_manager" in config and "sources" in config["data_manager"] and "sso" in config["data_manager"]["sources"] and config["data_manager"]["sources"]["sso"].get("enabled", False):
+            if "sso_class_map" in config["data_manager"]["sources"]["sso"]:
+                for sso_class in config["data_manager"]["sources"]["sso"]["sso_class_map"].keys():
+                    config["data_manager"]["sources"]["sso"]["sso_class_map"][sso_class]["class"] = SSO_MAPPING[sso_class]
 
     return config
 

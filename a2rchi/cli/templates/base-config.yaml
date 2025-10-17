@@ -104,6 +104,39 @@ data_manager:
     {%- for input_list in data_manager.input_lists | default([]) %}
     - {{ input_list }}
     {%- endfor %}
+  {%- if data_manager.sources is defined %}
+  sources:
+    {%- if data_manager.sources.links is defined %}
+    links:
+      input_lists:
+        {%- for input_list in data_manager.sources.links.input_lists | default([]) %}
+        - {{ input_list }}
+        {%- endfor %}
+    {%- endif %}
+    {%- if data_manager.sources.sso is defined %}
+    sso:
+      enabled: {{ data_manager.sources.sso.enabled | default(false, true) }}
+      sso_class: {{ data_manager.sources.sso.sso_class | default('CERNSSOScraper', true) }}
+      sso_class_map:
+        {%- for sso_class_name, sso_class_config in data_manager.sources.sso.sso_class_map.items() %}
+        {{ sso_class_name }}:
+          kwargs:
+            {%- for key, value in sso_class_config.kwargs.items() %}
+            {{ key }}: {{ value }}
+            {%- endfor %}
+        {%- endfor %}
+    {%- endif %}
+    {%- if data_manager.sources.jira is defined %}
+    jira:
+      enabled: {{ data_manager.sources.jira.enabled | default(false, true) }}
+      url: {{ data_manager.sources.jira.url }}
+      projects:
+        {%- for project in data_manager.sources.jira.projects | default([]) %}
+        - {{ project }}
+        {%- endfor %}
+      anonymize_data: {{ data_manager.sources.jira.anonymize_data | default(true, true) }}
+    {%- endif %}
+  {%- endif %}
   embedding_name: {{ data_manager.embedding_name | default('OpenAIEmbeddings', true) }}
   embedding_class_map:
     OpenAIEmbeddings:
@@ -270,28 +303,36 @@ a2rchi:
 
 utils:
   sso:
-    enabled: {{ utils.sso.enabled | default(false, true) }}
-    sso_class: {{ utils.sso.sso_class | default('CERNSSOScraper', true) }}
+    {%- set sso_config = utils.sso if utils.sso is defined else (data_manager.sources.sso if data_manager.sources.sso is defined else {}) %}
+    enabled: {{ sso_config.enabled | default(false, true) }}
+    sso_class: {{ sso_config.sso_class | default('CERNSSOScraper', true) }}
     sso_class_map:
       CERNSSOScraper:
         class: CERNSSOScraper
         kwargs:
-          headless: {{ utils.sso.sso_class_map.CERNSSOScraper.kwargs.headless | default(true, true) }}
-          max_depth: {{ utils.sso.sso_class_map.CERNSSOScraper.kwargs.max_depth | default(2, true) }}
+          headless: {{ sso_config.sso_class_map.CERNSSOScraper.kwargs.headless | default(true, true) if sso_config.sso_class_map is defined else true }}
+          max_depth: {{ sso_config.sso_class_map.CERNSSOScraper.kwargs.max_depth | default(2, true) if sso_config.sso_class_map is defined else 2 }}
   git:
     enabled: {{ utils.git.enabled | default(false, true) }}
   scraper:
-    reset_data: {{ utils.scraper.reset_data | default(true, true) }}
+    reset_data: {{ utils.scraper.reset_data | default(data_manager.sources.sso.reset_data if data_manager.sources.sso is defined else true, true) }}
     verify_urls: {{ utils.scraper.verify_urls | default(false, true) }}
     enable_warnings: {{ utils.scraper.enable_warnings | default(false, true) }}
   jira:
-    enabled: {{ utils.jira.enabled | default(false, true) }}
-    url: {{ utils.jira.JIRA_URL }}
+    {%- set jira_config = utils.jira if utils.jira is defined else (data_manager.sources.jira if data_manager.sources.jira is defined else {}) %}
+    enabled: {{ jira_config.enabled | default(false, true) }}
+    url: {{ jira_config.url | default(jira_config.JIRA_URL if jira_config.JIRA_URL is defined else None) }}
     projects: 
-      {%- for project in utils.jira.JIRA_PROJECTS %}
+      {%- if jira_config.projects is defined %}
+      {%- for project in jira_config.projects %}
       - {{ project }}
       {%- endfor %}
-    anonymize_data: {{ utils.jira.ANONYMIZE_DATA | default(true, true) }}
+      {%- elif jira_config.JIRA_PROJECTS is defined %}
+      {%- for project in jira_config.JIRA_PROJECTS %}
+      - {{ project }}
+      {%- endfor %}
+      {%- endif %}
+    anonymize_data: {{ jira_config.anonymize_data | default(jira_config.ANONYMIZE_DATA if jira_config.ANONYMIZE_DATA is defined else true, true) }}
   anonymizer:
     nlp_model: {{ utils.anonymizer.nlp_model | default('en_core_web_sm', true) }}
     excluded_words: 

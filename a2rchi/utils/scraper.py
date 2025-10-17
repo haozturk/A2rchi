@@ -32,7 +32,12 @@ class Scraper():
         self.websites_dir = os.path.join(self.data_path, "websites")
         os.makedirs(self.websites_dir, exist_ok=True)
 
+        # Check for input_lists in both old and new locations
         self.input_lists = dm_config.get("input_lists", [])
+        if self.input_lists is None or len(self.input_lists) == 0:
+            # Fallback to sources.links.input_lists if it exists
+            if "sources" in dm_config and "links" in dm_config["sources"]:
+                self.input_lists = dm_config["sources"]["links"].get("input_lists", [])
         if self.input_lists is None:
             self.input_lists = []
         logger.info(f"Input lists: {self.input_lists}")
@@ -94,7 +99,7 @@ class Scraper():
     def collect_urls_from_lists(self):
         urls = []
         for list_name in self.input_lists:
-            with open(os.path.join("weblists", os.path.basename(list_name)), "r") as f:
+            with open(list_name, "r") as f:
                 data = f.read()
 
             for line in data.split("\n"):
