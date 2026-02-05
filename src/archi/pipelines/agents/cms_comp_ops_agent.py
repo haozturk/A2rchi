@@ -6,6 +6,7 @@ from langchain_core.documents import Document
 from langchain.agents.middleware import TodoListMiddleware, LLMToolSelectorMiddleware
 
 from src.utils.logging import get_logger
+from src.utils.env import read_secret
 from src.archi.pipelines.agents.base_react import BaseReActAgent
 from src.data_manager.vectorstore.retrievers import HybridRetriever
 from src.archi.pipelines.agents.tools import (
@@ -15,6 +16,8 @@ from src.archi.pipelines.agents.tools import (
     create_metadata_schema_tool,
     create_retriever_tool,
     RemoteCatalogClient,
+    MONITOpenSearchClient,
+    create_monit_opensearch_tool,
 )
 from src.archi.pipelines.agents.utils.history_utils import infer_speaker
 
@@ -78,6 +81,58 @@ class CMSCompOpsAgent(BaseReActAgent):
 
         all_tools = [file_search_tool, metadata_search_tool, metadata_schema_tool, fetch_tool]
 
+        # MONIT OpenSearch tool for querying Rucio transfer events
+        monit_token = read_secret("MONIT_GRAFANA_TOKEN")
+        if monit_token:
+            try:
+                monit_client = MONITOpenSearchClient(token=monit_token)
+                monit_tool = create_monit_opensearch_tool(
+                    monit_client,
+                    description=(
+                        "Query CERN MONIT for CMS Rucio data transfer events using Lucene query syntax. "
+                        "Use this to find transfer status, file locations, IDs, and transfer metrics.\n\n"
+                        "Examples:\n"
+                        '- data.name="/store/mc/..."  (exact file path)\n'
+                        "- data.event_type:transfer-failed  (failed transfers)\n"
+                        "- data.event_type:transfer-done  (completed transfers)\n"
+                        "- data.dst_rse:T2_CH_CERN  (by destination RSE)\n\n"
+                        "Key fields: event_type (transfer-submitted/done/failed), name, src_rse, dst_rse, "
+                        "transfer_id, request_id, reason (for failures), bytes, activity, dataset."
+                    ),
+                )
+                all_tools.append(monit_tool)
+                logger.info("MONIT OpenSearch tool initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize MONIT OpenSearch tool: {e}")
+        else:
+            logger.info("MONIT_GRAFANA_TOKEN not found; MONIT OpenSearch tool not available")
+
+        try:
+            nest_asyncio.apply()
+
+            # 1. Fetch the tools (async)
+            client, mcp_tools = asyncio.run(initialize_mcp_client())
+            self.mcp_client = client  # Keep client alive
+
+            # 2. Patch tools to support synchronous execution
+            # This wrapper allows the sync agent to call the async tools
+            def make_synchronous(async_tool):
+                def sync_wrapper(*args, **kwargs):
+                    # We reuse the existing client session via the closure of the original tool
+                    return asyncio.run(async_tool.coroutine(*args, **kwargs))
+
+                # Assign the wrapper to the tool's 'func' attribute (standard LangChain sync entry point)
+                async_tool.func = sync_wrapper
+                return async_tool
+
+            # Apply the patch to all fetched tools
+            if mcp_tools:
+                synchronous_mcp_tools = [make_synchronous(t) for t in mcp_tools]
+                all_tools.extend(synchronous_mcp_tools)
+                logger.info(f"Loaded and patched {len(synchronous_mcp_tools)} MCP tools for sync execution.")
+
+        except Exception as e:
+            logger.error(f"Failed to load MCP tools: {e}", exc_info=True)
 
         return all_tools
 
