@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Sequence
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from langchain_core.documents import Document
 
@@ -17,10 +18,44 @@ from src.archi.pipelines.agents.tools import (
     RemoteCatalogClient,
     MONITOpenSearchClient,
     create_monit_opensearch_tool,
+    create_monit_opensearch_aggregation_tool,
 )
 from src.archi.pipelines.agents.utils.history_utils import infer_speaker
 
 logger = get_logger(__name__)
+
+
+def _load_skill(skill_name: str, config: Dict[str, Any]) -> Optional[str]:
+    """
+    Load a skill markdown file by name from the config's skills directory.
+    
+    Skills are markdown files in the config directory's `skills/` subdirectory.
+    Returns None if the skill file doesn't exist.
+    
+    Args:
+        skill_name: Name of the skill file (without .md extension).
+        config: Agent config dict containing 'config_path'.
+        
+    Returns:
+        Skill content as string, or None if not found.
+    """
+    config_path = config.get("config_path")
+    if not config_path:
+        logger.warning("No config_path in config; cannot load skill '%s'", skill_name)
+        return None
+    
+    skill_path = Path(config_path).parent / "skills" / f"{skill_name}.md"
+    if not skill_path.exists():
+        logger.warning("Skill file not found: %s", skill_path)
+        return None
+    
+    try:
+        content = skill_path.read_text(encoding="utf-8")
+        logger.info("Loaded skill '%s' from %s (%d chars)", skill_name, skill_path, len(content))
+        return content
+    except Exception as e:
+        logger.error("Failed to read skill file %s: %s", skill_path, e)
+        return None
 
 
 class CMSCompOpsAgent(BaseReActAgent):
@@ -86,26 +121,52 @@ class CMSCompOpsAgent(BaseReActAgent):
             try:
                 monit_client = MONITOpenSearchClient(token=monit_token)
                 
+                # Load skill for Rucio transfers
+                rucio_skill = _load_skill("rucio_transfers", self.config)
+                
                 # Rucio transfer events tool
+                # Rucio search tool (for fetching individual events)
                 rucio_tool = create_monit_opensearch_tool(
                     monit_client,
-                    name="search_rucio_transfers",
+                    name="search_rucio_events",
                     index_pattern="monit_prod_cms_rucio_raw_events*",
-                    index_description="CMS Rucio data transfer events (submitted, done, failed transfers).",
+                    index_description="CMS Rucio events (transfers, deletions, rules, datasets). Use for fetching individual event details.",
                     key_fields=[
                         "data.event_type",
                         "data.name",
                         "data.src_rse",
                         "data.dst_rse",
+                        "data.rse",
                         "data.reason",
                         "data.transfer_id",
                         "data.request_id",
                         "data.bytes",
                         "data.activity",
                     ],
+                    skill=rucio_skill,
                 )
                 all_tools.append(rucio_tool)
-                logger.info("MONIT Rucio OpenSearch tool initialized successfully")
+                logger.info("MONIT Rucio search tool initialized successfully")
+                
+                # Rucio aggregation tool (for counting, grouping, statistics)
+                rucio_agg_tool = create_monit_opensearch_aggregation_tool(
+                    monit_client,
+                    name="aggregate_rucio_events",
+                    index_pattern="monit_prod_cms_rucio_raw_events*",
+                    index_description="Aggregate CMS Rucio events. Use for questions like 'top errors', 'count by RSE', 'total bytes'.",
+                    key_fields=[
+                        "data.event_type",
+                        "data.reason",
+                        "data.src_rse",
+                        "data.dst_rse",
+                        "data.rse",
+                        "data.activity",
+                        "data.state",
+                    ],
+                    skill=rucio_skill,
+                )
+                all_tools.append(rucio_agg_tool)
+                logger.info("MONIT Rucio aggregation tool initialized successfully")
                 
             except Exception as e:
                 logger.warning(f"Failed to initialize MONIT OpenSearch tools: {e}")

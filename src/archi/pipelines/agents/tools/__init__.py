@@ -10,6 +10,7 @@ from .mcp import initialize_mcp_client
 from .monit_opensearch import (
     MONITOpenSearchClient,
     create_monit_opensearch_tool,
+    create_monit_opensearch_aggregation_tool,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "initialize_mcp_client",
     "MONITOpenSearchClient",
     "create_monit_opensearch_tool",
+    "create_monit_opensearch_aggregation_tool",
 ]
