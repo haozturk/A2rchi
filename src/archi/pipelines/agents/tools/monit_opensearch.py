@@ -1,8 +1,9 @@
 """
-MONIT OpenSearch client and LangChain tool for querying CMS Rucio events.
+Generic OpenSearch client and LangChain tool for querying any OpenSearch index.
 
-This module provides access to CERN's MONIT Grafana API for querying
-OpenSearch indices containing CMS monitoring data.
+This module provides a flexible, index-agnostic interface to CERN's MONIT Grafana API
+for querying OpenSearch indices. It supports dynamic schema discovery and works with
+any index pattern.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ class MONITOpenSearchClient:
         *,
         token: Optional[str] = None,
         url: str = "https://monit-grafana.cern.ch/api/datasources/proxy/9269/_msearch",
-        default_index: str = "monit_prod_cms_rucio_raw_events*",
+        default_index: Optional[str] = None,
         timeout: float = 60.0,
     ):
         """
@@ -42,7 +43,7 @@ class MONITOpenSearchClient:
             token: Bearer token for MONIT Grafana API authentication.
                    If not provided, reads from MONIT_GRAFANA_TOKEN env var.
             url: Full URL to the _msearch endpoint.
-            default_index: Default index pattern for queries.
+            default_index: Default index pattern for queries (optional).
             timeout: Request timeout in seconds.
         """
         self.token = token or read_secret("MONIT_GRAFANA_TOKEN")
@@ -72,7 +73,7 @@ class MONITOpenSearchClient:
         
         Args:
             es_query: Elasticsearch Query DSL dictionary.
-            index: Index pattern (defaults to self.default_index).
+            index: Index pattern (required if no default_index set).
             search_type: Search type for meta query.
             
         Returns:
@@ -81,8 +82,11 @@ class MONITOpenSearchClient:
         Raises:
             requests.HTTPError: On HTTP errors.
             requests.Timeout: On timeout.
+            ValueError: If no index is provided.
         """
         index_pattern = index or self.default_index
+        if not index_pattern:
+            raise ValueError("Index pattern is required. Provide 'index' argument or set default_index.")
         
         meta_query = {
             "search_type": search_type,
@@ -106,29 +110,29 @@ class MONITOpenSearchClient:
         self,
         lucene_query: str,
         *,
+        index: str,
         from_time: str = "now-24h",
         to_time: str = "now",
         time_field: str = "metadata.timestamp",
         size: int = 10,
-        index: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a Lucene query with time range filtering.
         
         Args:
             lucene_query: Lucene query string (e.g., 'data.name="/store/..."').
+            index: Index pattern to query (required).
             from_time: Start time in Elasticsearch date math.
             to_time: End time in Elasticsearch date math.
             time_field: Field to use for time range filtering.
             size: Maximum number of results to return.
-            index: Index pattern (defaults to self.default_index).
             
         Returns:
             Raw JSON response from OpenSearch.
         """
         es_query = {
             "size": size,
-            "_source": True,  # Ensure all source fields are returned
+            "_source": True,
             "query": {
                 "bool": {
                     "must": [
@@ -159,195 +163,161 @@ class MONITOpenSearchClient:
         
         return self.query(es_query, index=index)
 
-
-def _format_file_size(bytes_value: Any) -> str:
-    """Format file size in human-readable format."""
-    try:
-        # Handle string with commas
-        if isinstance(bytes_value, str):
-            bytes_value = int(bytes_value.replace(",", ""))
-        bytes_value = int(bytes_value)
+    def get_index_fields(self, index: str, sample_size: int = 1) -> Dict[str, str]:
+        """
+        Discover available fields by fetching a sample document.
         
-        for unit in ["B", "KB", "MB", "GB", "TB"]:
-            if abs(bytes_value) < 1024.0:
-                return f"{bytes_value:.1f} {unit}"
-            bytes_value /= 1024.0
-        return f"{bytes_value:.1f} PB"
-    except (ValueError, TypeError):
-        return str(bytes_value)
+        Args:
+            index: Index pattern to sample.
+            sample_size: Number of documents to sample (default: 1).
+            
+        Returns:
+            Dict mapping field paths to their types, e.g.:
+            {"data.name": "str", "data.bytes": "int", "metadata.timestamp": "int"}
+        """
+        es_query = {
+            "size": sample_size,
+            "_source": True,
+            "query": {"match_all": {}},
+        }
+        
+        try:
+            response = self.query(es_query, index=index)
+            responses = response.get("responses", [response])
+            
+            if responses and responses[0].get("hits", {}).get("hits"):
+                source = responses[0]["hits"]["hits"][0].get("_source", {})
+                return self._extract_field_paths(source)
+        except Exception as e:
+            logger.warning("Failed to discover fields for index %s: %s", index, e)
+        
+        return {}
+
+    def _extract_field_paths(self, obj: Any, prefix: str = "") -> Dict[str, str]:
+        """Recursively extract field paths and types from a nested dict."""
+        fields = {}
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                path = f"{prefix}.{key}" if prefix else key
+                if isinstance(value, dict):
+                    fields.update(self._extract_field_paths(value, path))
+                else:
+                    fields[path] = type(value).__name__
+        return fields
 
 
-def _format_duration(seconds: Any) -> str:
-    """Format duration in human-readable format."""
-    try:
-        seconds = int(seconds)
-        if seconds < 60:
-            return f"{seconds}s"
-        elif seconds < 3600:
-            minutes = seconds // 60
-            secs = seconds % 60
-            return f"{minutes}m {secs}s"
+# =============================================================================
+# Generic Formatting Utilities
+# =============================================================================
+
+def _flatten_dict(d: Dict[str, Any], parent_key: str = "") -> Dict[str, Any]:
+    """Flatten nested dict into dot-notation keys."""
+    items = {}
+    if not isinstance(d, dict):
+        return items
+    for k, v in d.items():
+        new_key = f"{parent_key}.{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.update(_flatten_dict(v, new_key))
         else:
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            return f"{hours}h {minutes}m"
-    except (ValueError, TypeError):
-        return str(seconds)
+            items[new_key] = v
+    return items
 
 
-def _format_rucio_event(hit: Dict[str, Any], idx: int) -> str:
-    """Format a single Rucio event for LLM consumption."""
+def _format_value(value: Any, max_length: int = 80) -> str:
+    """Format a value for display, truncating if necessary."""
+    if value is None:
+        return "null"
+    
+    str_value = str(value)
+    if len(str_value) > max_length:
+        return str_value[:max_length - 3] + "..."
+    return str_value
+
+
+def _format_hit_generic(
+    hit: Dict[str, Any],
+    idx: int,
+    key_fields: Optional[List[str]] = None,
+) -> str:
+    """
+    Format any OpenSearch hit generically.
+    
+    Args:
+        hit: The OpenSearch hit document.
+        idx: Index number for display.
+        key_fields: Optional list of field paths to highlight at the top.
+        
+    Returns:
+        Formatted string representation of the hit.
+    """
     source = hit.get("_source", {})
     
-    # Handle case where _source is a JSON string (MONIT sometimes returns this)
+    # Handle case where _source is a JSON string
     if isinstance(source, str):
         try:
             source = json.loads(source)
         except json.JSONDecodeError:
-            logger.warning("Failed to parse _source as JSON: %s", source[:200])
-            return f"[{idx}] Error: Could not parse event data"
+            logger.warning("Failed to parse _source as JSON")
+            return f"[{idx}] Error: Could not parse document data"
     
-    # If source is still not a dict, log and return error
     if not isinstance(source, dict):
-        logger.warning("Unexpected _source type: %s", type(source))
-        return f"[{idx}] Error: Unexpected event data format"
+        return f"[{idx}] Error: Unexpected document format"
     
-    # Log the first few keys for debugging
-    logger.debug("_source keys: %s", list(source.keys())[:10])
+    # Flatten the nested structure
+    flat = _flatten_dict(source)
     
-    # Extract data fields - handle both nested and flat structures
-    data = {}
-    
-    # Check for nested structure: {"data": {...}, "metadata": {...}}
-    if "data" in source and isinstance(source["data"], dict):
-        # Nested structure
-        for key, value in source["data"].items():
-            data[key] = value
-        if "metadata" in source and isinstance(source["metadata"], dict):
-            for key, value in source["metadata"].items():
-                data[f"meta_{key}"] = value
-    else:
-        # Flat structure with prefixes like "data.name", "metadata.timestamp"
-        for key, value in source.items():
-            if key.startswith("data."):
-                data[key[5:]] = value  # Remove 'data.' prefix
-            elif key.startswith("metadata."):
-                data[f"meta_{key[9:]}"] = value  # Prefix metadata fields
-            else:
-                data[key] = value
-    
-    # Build formatted output - use event_created_at or meta_timestamp for time
-    timestamp = data.get("event_created_at") or data.get("meta_timestamp") or "unknown"
-    lines = [f"[{idx}] Event at {timestamp}"]
+    lines = [f"[{idx}] Document (score: {hit.get('_score', 'N/A')})"]
     lines.append("    " + "─" * 50)
     
-    # Event type is the primary status indicator (not "state" which doesn't exist)
-    event_type = data.get("event_type", "unknown")
-    lines.append(f"    event_type:    {event_type}")
-    
-    # Show reason for failed transfers
-    reason = data.get("reason")
-    if reason:
-        # Truncate long reason messages
-        if len(reason) > 100:
-            reason = reason[:100] + "..."
-        lines.append(f"    reason:        {reason}")
-    
-    # IDs (important for lookups)
-    # transfer_id is the FTS job ID; request_id is the Rucio request ID
-    if data.get("transfer_id"):
-        lines.append(f"    transfer_id:   {data['transfer_id']}")
-    if data.get("request_id"):
-        lines.append(f"    request_id:    {data['request_id']}")
-    
-    # FTS monitoring link (very useful for debugging)
-    if data.get("transfer_link"):
-        lines.append(f"    transfer_link: {data['transfer_link']}")
-    
-    # File info
-    lines.append("")
-    lines.append("    File:")
-    if data.get("name"):
-        name = data["name"]
-        # Truncate long file names for readability
-        if len(name) > 80:
-            name = name[:40] + "..." + name[-37:]
-        lines.append(f"      name:        {name}")
-    if data.get("scope"):
-        lines.append(f"      scope:       {data['scope']}")
-    if data.get("bytes") or data.get("file_size"):
-        size = data.get("bytes") or data.get("file_size")
-        lines.append(f"      size:        {_format_file_size(size)}")
-    if data.get("checksum_adler"):
-        lines.append(f"      checksum:    {data['checksum_adler']} (adler32)")
-    
-    # Transfer info
-    src_rse = data.get("src_rse")
-    dst_rse = data.get("dst_rse")
-    if src_rse or dst_rse:
+    # Show key fields first (if specified)
+    shown_fields = set()
+    if key_fields:
+        lines.append("    Key fields:")
+        for field in key_fields:
+            if field in flat:
+                value = _format_value(flat[field])
+                lines.append(f"      {field}: {value}")
+                shown_fields.add(field)
         lines.append("")
-        lines.append("    Transfer:")
-        if src_rse:
-            lines.append(f"      src_rse:     {src_rse}")
-        if dst_rse:
-            lines.append(f"      dst_rse:     {dst_rse}")
-        if data.get("activity"):
-            lines.append(f"      activity:    {data['activity']}")
-        if data.get("account"):
-            lines.append(f"      account:     {data['account']}")
-        if data.get("protocol"):
-            lines.append(f"      protocol:    {data['protocol']}")
-        if data.get("transfer_endpoint"):
-            lines.append(f"      endpoint:    {data['transfer_endpoint']}")
     
-    # Timing info
-    timing_info = []
-    if data.get("duration"):
-        timing_info.append(f"duration: {_format_duration(data['duration'])}")
-    if data.get("submitted_at"):
-        timing_info.append(f"submitted: {data['submitted_at']}")
-    if data.get("started_at"):
-        timing_info.append(f"started: {data['started_at']}")
-    if data.get("transferred_at"):
-        timing_info.append(f"transferred: {data['transferred_at']}")
-    
-    if timing_info:
-        lines.append("")
-        lines.append("    Timing:")
-        for info in timing_info:
-            lines.append(f"      {info}")
-    
-    # Dataset info
-    dataset = data.get("dataset")
-    if dataset:
-        lines.append("")
-        lines.append("    Dataset:")
-        # Truncate long dataset names
-        if len(dataset) > 80:
-            dataset = dataset[:40] + "..." + dataset[-37:]
-        lines.append(f"      name:        {dataset}")
-        if data.get("datasetScope"):
-            lines.append(f"      scope:       {data['datasetScope']}")
+    # Show remaining fields
+    remaining = {k: v for k, v in flat.items() if k not in shown_fields}
+    if remaining:
+        lines.append("    All fields:")
+        for key in sorted(remaining.keys()):
+            value = _format_value(remaining[key])
+            lines.append(f"      {key}: {value}")
     
     return "\n".join(lines)
 
 
-def _format_monit_response(
+def _format_opensearch_response(
     response: Dict[str, Any],
     query: str,
+    index_pattern: str,
     max_results: int,
+    key_fields: Optional[List[str]] = None,
 ) -> str:
-    """Format MONIT OpenSearch response for LLM consumption."""
-    # Log response structure for debugging
-    logger.debug("Response keys: %s", list(response.keys()))
+    """
+    Format OpenSearch response for LLM consumption.
     
+    Args:
+        response: Raw OpenSearch response.
+        query: The original query string.
+        index_pattern: The index pattern queried.
+        max_results: Maximum results to display.
+        key_fields: Optional list of field paths to highlight.
+        
+    Returns:
+        Formatted string suitable for LLM consumption.
+    """
     # Handle _msearch response format (array of responses)
     responses = response.get("responses", [response])
     if not responses:
         return f"No results found for query: {query}"
     
     first_response = responses[0]
-    logger.debug("First response keys: %s", list(first_response.keys()))
     
     # Check for errors
     if first_response.get("error"):
@@ -360,17 +330,6 @@ def _format_monit_response(
     hits = hits_obj.get("hits", [])
     total = hits_obj.get("total", {})
     
-    # Debug log the first hit structure
-    if hits:
-        first_hit = hits[0]
-        logger.debug("First hit keys: %s", list(first_hit.keys()))
-        source = first_hit.get("_source")
-        logger.debug("_source type: %s", type(source).__name__)
-        if isinstance(source, dict):
-            logger.debug("_source sample keys: %s", list(source.keys())[:5])
-        elif isinstance(source, str):
-            logger.debug("_source is string, first 200 chars: %s", source[:200])
-    
     # Handle different total formats
     if isinstance(total, dict):
         total_count = total.get("value", 0)
@@ -381,87 +340,142 @@ def _format_monit_response(
         total_str = str(total_count)
     
     if not hits:
-        return f"No Rucio events found matching query: {query}"
+        return f"No documents found in '{index_pattern}' matching query: {query}"
     
     # Format header
     lines = [
-        f"Found {total_str} Rucio event(s) matching query: {query}",
+        f"Found {total_str} document(s) in '{index_pattern}' matching: {query}",
         f"Showing {min(len(hits), max_results)} result(s):",
         "",
     ]
     
     # Format each hit
     for idx, hit in enumerate(hits[:max_results], start=1):
-        lines.append(_format_rucio_event(hit, idx))
+        lines.append(_format_hit_generic(hit, idx, key_fields))
         lines.append("")
     
     return "\n".join(lines)
 
 
+# =============================================================================
+# Tool Description Builder
+# =============================================================================
+
+def _build_tool_description(
+    index_pattern: str,
+    index_description: str,
+    key_fields: Optional[List[str]] = None,
+) -> str:
+    """
+    Build tool description dynamically based on index configuration.
+    
+    Args:
+        index_pattern: The OpenSearch index pattern.
+        index_description: Human-readable description of what the index contains.
+        key_fields: Optional list of key field paths for query hints.
+        
+    Returns:
+        Tool description string.
+    """
+    lines = [
+        f"Query OpenSearch index '{index_pattern}' using Lucene query syntax.",
+    ]
+    
+    if index_description:
+        lines.append(index_description)
+    
+    lines.append("")
+    lines.append("Input parameters:")
+    lines.append("- query: Lucene query string (required). Examples:")
+    lines.append("    field_name:value  (exact match)")
+    lines.append("    field_name:*wildcard*  (wildcard search)")
+    lines.append("    field_a:value AND field_b:value  (boolean)")
+    lines.append("- from_time: Start time (default: 'now-24h'). Supports ES date math.")
+    lines.append("- to_time: End time (default: 'now'). Supports ES date math.")
+    lines.append("- max_results: Max documents to return (default: 10).")
+    
+    if key_fields:
+        lines.append("")
+        lines.append(f"Key fields in this index: {', '.join(key_fields)}")
+        lines.append("Use these in queries like: field_name:value")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# LangChain Tool Factory
+# =============================================================================
+
 def create_monit_opensearch_tool(
     client: MONITOpenSearchClient,
     *,
-    name: str = "search_monit_rucio",
+    index_pattern: str,
+    name: str = "search_opensearch",
+    index_description: str = "",
+    key_fields: Optional[List[str]] = None,
+    time_field: str = "metadata.timestamp",
     description: Optional[str] = None,
     max_results: int = 10,
+    auto_discover_fields: bool = False,
 ) -> Callable[..., str]:
     """
-    Create a LangChain tool for querying MONIT OpenSearch.
+    Create a LangChain tool for querying a specific OpenSearch index.
     
     The tool accepts Lucene query syntax and returns formatted results
     suitable for LLM consumption.
     
     Args:
         client: MONITOpenSearchClient instance.
+        index_pattern: The OpenSearch index pattern to query (required).
         name: Tool name for LangChain.
-        description: Tool description (uses default if not provided).
+        index_description: Human-readable description of what the index contains.
+        key_fields: List of important field paths to highlight in output.
+                   If None and auto_discover_fields is True, fields are discovered.
+        time_field: Field to use for time range filtering.
+        description: Full tool description (overrides auto-generated if provided).
         max_results: Default maximum results to return.
+        auto_discover_fields: If True and key_fields is None, discover fields from index.
         
     Returns:
         LangChain tool function.
     """
+    # Optionally discover fields from index
+    effective_key_fields = key_fields
+    if effective_key_fields is None and auto_discover_fields:
+        try:
+            discovered = client.get_index_fields(index_pattern)
+            # Take first 10 fields as key fields
+            effective_key_fields = list(discovered.keys())[:10]
+            logger.info("Discovered %d fields from index %s", len(discovered), index_pattern)
+        except Exception as e:
+            logger.warning("Field discovery failed for %s: %s", index_pattern, e)
+            effective_key_fields = None
     
-    tool_description = description or (
-        "Query CERN MONIT for CMS Rucio data transfer events using Lucene query syntax.\n"
-        "Use this to find transfer status, file locations, IDs, and transfer metrics.\n\n"
-        "Input parameters:\n"
-        "- query: Lucene query string (required). Examples:\n"
-        '  - data.name="/store/mc/Run3Summer22MiniAODv4/..."  (exact file path)\n'
-        "  - data.name:*MiniAODSIM*  (wildcard search)\n"
-        "  - data.event_type:transfer-submitted  (submitted transfers)\n"
-        "  - data.event_type:transfer-failed  (failed transfers)\n"
-        "  - data.event_type:transfer-done  (completed transfers)\n"
-        "  - data.dst_rse:T1_IT_CNAF_Tape  (by destination RSE)\n"
-        "  - data.event_type:transfer-failed AND data.dst_rse:T2_CH_CERN  (boolean)\n"
-        "- from_time: Start time (default: 'now-24h'). Supports ES date math.\n"
-        "- to_time: End time (default: 'now'). Supports ES date math.\n"
-        "- max_results: Max documents to return (default: 10).\n\n"
-        "Common data fields:\n"
-        "- event_type: transfer-submitted, transfer-done, transfer-failed, etc.\n"
-        "- name: file path, src_rse/dst_rse: source/destination RSE\n"
-        "- transfer_id: FTS job ID, request_id: Rucio request ID\n"
-        "- reason: error message for failed transfers\n"
-        "- bytes, activity, scope, dataset, account, protocol"
+    # Build tool description
+    tool_description = description or _build_tool_description(
+        index_pattern=index_pattern,
+        index_description=index_description,
+        key_fields=effective_key_fields,
     )
     
     @tool(name, description=tool_description)
-    def _search_monit_rucio(
+    def _search_opensearch(
         query: str,
         from_time: str = "now-24h",
         to_time: str = "now",
         max_results_override: Optional[int] = None,
     ) -> str:
         """
-        Query MONIT OpenSearch for CMS Rucio events.
+        Query OpenSearch for documents matching the given Lucene query.
         
         Args:
-            query: Lucene query string (e.g., data.name="/store/..." or data.event_type:transfer-*)
+            query: Lucene query string
             from_time: Start time in ES date math (default: now-24h)
             to_time: End time in ES date math (default: now)
             max_results_override: Override default max results
             
         Returns:
-            Formatted string with matching Rucio events.
+            Formatted string with matching documents.
         """
         if not query or not query.strip():
             return "Please provide a non-empty Lucene query."
@@ -471,29 +485,37 @@ def create_monit_opensearch_tool(
         try:
             response = client.search_with_lucene(
                 lucene_query=query.strip(),
+                index=index_pattern,
                 from_time=from_time,
                 to_time=to_time,
+                time_field=time_field,
                 size=effective_max,
             )
-            return _format_monit_response(response, query.strip(), effective_max)
+            return _format_opensearch_response(
+                response=response,
+                query=query.strip(),
+                index_pattern=index_pattern,
+                max_results=effective_max,
+                key_fields=effective_key_fields,
+            )
             
         except requests.exceptions.Timeout:
-            logger.warning("MONIT query timed out for query: %s", query)
+            logger.warning("OpenSearch query timed out for query: %s", query)
             return (
-                "Query timed out. The MONIT service may be slow or the query too broad. "
+                "Query timed out. The service may be slow or the query too broad. "
                 "Try narrowing the time range or making the query more specific."
             )
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response is not None else "unknown"
-            logger.warning("MONIT HTTP error %s for query: %s", status_code, query)
+            logger.warning("OpenSearch HTTP error %s for query: %s", status_code, query)
             if status_code == 401 or status_code == 403:
-                return "Authentication failed. The MONIT token may be invalid or expired."
-            return f"MONIT query failed with HTTP error {status_code}. Please try again."
+                return "Authentication failed. The token may be invalid or expired."
+            return f"Query failed with HTTP error {status_code}. Please try again."
         except Exception as e:
-            logger.error("MONIT query error: %s", e, exc_info=True)
-            return f"Error querying MONIT: {str(e)}"
+            logger.error("OpenSearch query error: %s", e, exc_info=True)
+            return f"Error querying OpenSearch: {str(e)}"
     
-    return _search_monit_rucio
+    return _search_opensearch
 
 
 __all__ = [
