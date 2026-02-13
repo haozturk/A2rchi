@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Sequence
 
 from langchain_core.documents import Document
 
@@ -21,41 +20,9 @@ from src.archi.pipelines.agents.tools import (
     create_monit_opensearch_aggregation_tool,
 )
 from src.archi.pipelines.agents.utils.history_utils import infer_speaker
+from src.archi.pipelines.agents.utils.skill_utils import load_skill
 
 logger = get_logger(__name__)
-
-
-def _load_skill(skill_name: str, config: Dict[str, Any]) -> Optional[str]:
-    """
-    Load a skill markdown file by name from the config's skills directory.
-    
-    Skills are markdown files in the config directory's `skills/` subdirectory.
-    Returns None if the skill file doesn't exist.
-    
-    Args:
-        skill_name: Name of the skill file (without .md extension).
-        config: Agent config dict containing 'config_path'.
-        
-    Returns:
-        Skill content as string, or None if not found.
-    """
-    config_path = config.get("config_path")
-    if not config_path:
-        logger.warning("No config_path in config; cannot load skill '%s'", skill_name)
-        return None
-    
-    skill_path = Path(config_path).parent / "skills" / f"{skill_name}.md"
-    if not skill_path.exists():
-        logger.warning("Skill file not found: %s", skill_path)
-        return None
-    
-    try:
-        content = skill_path.read_text(encoding="utf-8")
-        logger.info("Loaded skill '%s' from %s (%d chars)", skill_name, skill_path, len(content))
-        return content
-    except Exception as e:
-        logger.error("Failed to read skill file %s: %s", skill_path, e)
-        return None
 
 
 class CMSCompOpsAgent(BaseReActAgent):
@@ -123,7 +90,7 @@ class CMSCompOpsAgent(BaseReActAgent):
                 monit_client = MONITOpenSearchClient(url=monit_url, token=monit_token)
                 
                 # Load skill for Rucio events monitoring
-                rucio_events_skill = _load_skill("rucio_events", self.config)
+                rucio_events_skill = load_skill("rucio_events", self.config)
                 
                 # Rucio events search tool (for fetching individual events)
                 rucio_events_search_tool = create_monit_opensearch_search_tool(
@@ -148,7 +115,7 @@ class CMSCompOpsAgent(BaseReActAgent):
                 logger.info("Rucio events aggregation tool initialized")
                 
             except Exception as e:
-                logger.warning(f"Failed to initialize MONIT OpenSearch tools: {e}")
+                logger.warning("Failed to initialize MONIT OpenSearch tools: %s", e)
         else:
             logger.info("MONIT_GRAFANA_TOKEN not found; MONIT OpenSearch tools not available")
 

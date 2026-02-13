@@ -1,27 +1,29 @@
 """
-Generic OpenSearch client and LangChain tool for querying any OpenSearch index.
+Generic OpenSearch client and LangChain tools for querying any OpenSearch index.
 
 This module provides a flexible, index-agnostic interface to CERN's MONIT Grafana API
-for querying OpenSearch indices. It supports dynamic schema discovery and works with
-any index pattern.
+for querying OpenSearch indices. It supports search and aggregation queries and works
+with any index pattern. Domain-specific knowledge is provided via skill files.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 import requests
 from langchain.tools import tool
 
 from src.utils.logging import get_logger
-from src.utils.env import read_secret
 
 logger = get_logger(__name__)
 
 # Safety limits to prevent overwhelming the LLM context
 MAX_RESULTS_HARD_LIMIT = 50  # Never return more than this many documents
 MAX_OUTPUT_CHARS = 50000    # Truncate output if it exceeds this
+
+# Time format accepted by OpenSearch range filters
+_TIME_FORMAT = "strict_date_optional_time||epoch_millis"
 
 
 class MONITOpenSearchClient:
@@ -36,8 +38,7 @@ class MONITOpenSearchClient:
         self,
         *,
         url: str,
-        token: Optional[str] = None,
-        default_index: Optional[str] = None,
+        token: str,
         timeout: float = 60.0,
     ):
         """
@@ -45,19 +46,11 @@ class MONITOpenSearchClient:
         
         Args:
             url: Full URL to the _msearch endpoint (required).
-            token: Bearer token for MONIT Grafana API authentication.
-                   If not provided, reads from MONIT_GRAFANA_TOKEN env var.
-            default_index: Default index pattern for queries (optional).
+            token: Bearer token for MONIT Grafana API authentication (required).
             timeout: Request timeout in seconds.
         """
-        self.token = token or read_secret("MONIT_GRAFANA_TOKEN")
-        if not self.token:
-            raise ValueError(
-                "MONIT Grafana token not provided. Set MONIT_GRAFANA_TOKEN environment variable."
-            )
-        
         self.url = url
-        self.default_index = default_index
+        self.token = token
         self.timeout = timeout
         
         self.headers = {
@@ -69,7 +62,7 @@ class MONITOpenSearchClient:
         self,
         query_dsl: Dict[str, Any],
         *,
-        index: Optional[str] = None,
+        index: str,
         search_type: str = "query_then_fetch",
     ) -> Dict[str, Any]:
         """
@@ -77,7 +70,7 @@ class MONITOpenSearchClient:
         
         Args:
             query_dsl: Query DSL dictionary (OpenSearch compatible).
-            index: Index pattern (required if no default_index set).
+            index: Index pattern (required).
             search_type: Search type for meta query.
             
         Returns:
@@ -86,16 +79,12 @@ class MONITOpenSearchClient:
         Raises:
             requests.HTTPError: On HTTP errors.
             requests.Timeout: On timeout.
-            ValueError: If no index is provided.
         """
-        index_pattern = index or self.default_index
-        if not index_pattern:
-            raise ValueError("Index pattern is required. Provide 'index' argument or set default_index.")
         
         meta_query = {
             "search_type": search_type,
             "ignore_unavailable": True,
-            "index": [index_pattern],
+            "index": [index],
         }
         
         # Format as NDJSON (newline-delimited JSON) for _msearch
@@ -153,7 +142,7 @@ class MONITOpenSearchClient:
                                 time_field: {
                                     "gte": from_time,
                                     "lte": to_time,
-                                    "format": "strict_date_optional_time||epoch_millis",
+                                    "format": _TIME_FORMAT,
                                 }
                             }
                         }
@@ -166,48 +155,6 @@ class MONITOpenSearchClient:
         }
         
         return self.query(query_dsl, index=index)
-
-    def get_index_fields(self, index: str, sample_size: int = 1) -> Dict[str, str]:
-        """
-        Discover available fields by fetching a sample document.
-        
-        Args:
-            index: Index pattern to sample.
-            sample_size: Number of documents to sample (default: 1).
-            
-        Returns:
-            Dict mapping field paths to their types, e.g.:
-            {"data.name": "str", "data.bytes": "int", "metadata.timestamp": "int"}
-        """
-        query_dsl = {
-            "size": sample_size,
-            "_source": True,
-            "query": {"match_all": {}},
-        }
-        
-        try:
-            response = self.query(query_dsl, index=index)
-            responses = response.get("responses", [response])
-            
-            if responses and responses[0].get("hits", {}).get("hits"):
-                source = responses[0]["hits"]["hits"][0].get("_source", {})
-                return self._extract_field_paths(source)
-        except Exception as e:
-            logger.warning("Failed to discover fields for index %s: %s", index, e)
-        
-        return {}
-
-    def _extract_field_paths(self, obj: Any, prefix: str = "") -> Dict[str, str]:
-        """Recursively extract field paths and types from a nested dict."""
-        fields = {}
-        if isinstance(obj, dict):
-            for key, value in obj.items():
-                path = f"{prefix}.{key}" if prefix else key
-                if isinstance(value, dict):
-                    fields.update(self._extract_field_paths(value, path))
-                else:
-                    fields[path] = type(value).__name__
-        return fields
 
     def search_with_aggregation(
         self,
@@ -284,7 +231,7 @@ class MONITOpenSearchClient:
                                 time_field: {
                                     "gte": from_time,
                                     "lte": to_time,
-                                    "format": "strict_date_optional_time||epoch_millis",
+                                    "format": _TIME_FORMAT,
                                 }
                             }
                         }
