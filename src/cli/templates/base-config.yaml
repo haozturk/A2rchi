@@ -329,6 +329,13 @@ archi:
       models:
         required:
           agent_model: {{ archi.pipeline_map.CMSCompOpsAgent.models.required.agent_model | default('openai/gpt-4o', true) }}
+      {%- if archi.pipeline_map.CMSCompOpsAgent.tools is defined %}
+      tools:
+        {%- if archi.pipeline_map.CMSCompOpsAgent.tools.monit is defined %}
+        monit:
+          url: {{ archi.pipeline_map.CMSCompOpsAgent.tools.monit.url }}
+        {%- endif %}
+      {%- endif %}
 
   chain_update_time: {{ archi.chain_update_time | default(10, true) }}
   mcp_servers: {{ archi.mcp_servers | default({}, true) }}

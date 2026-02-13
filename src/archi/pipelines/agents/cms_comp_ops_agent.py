@@ -84,8 +84,8 @@ class CMSCompOpsAgent(BaseReActAgent):
 
         # MONIT OpenSearch tools for querying various indices
         monit_token = read_secret("MONIT_GRAFANA_TOKEN")
-        monit_url = "https://monit-grafana.cern.ch/api/datasources/proxy/9269/_msearch"
-        if monit_token:
+        monit_url = self.pipeline_config.get("tools", {}).get("monit", {}).get("url")
+        if monit_token and monit_url:
             try:
                 monit_client = MONITOpenSearchClient(url=monit_url, token=monit_token)
                 
@@ -117,7 +117,10 @@ class CMSCompOpsAgent(BaseReActAgent):
             except Exception as e:
                 logger.warning("Failed to initialize MONIT OpenSearch tools: %s", e)
         else:
-            logger.info("MONIT_GRAFANA_TOKEN not found; MONIT OpenSearch tools not available")
+            if not monit_url:
+                logger.info("No MONIT URL configured in pipeline_map.CMSCompOpsAgent.tools.monit.url; MONIT OpenSearch tools not available")
+            else:
+                logger.info("MONIT_GRAFANA_TOKEN not found; MONIT OpenSearch tools not available")
 
         return all_tools
 
