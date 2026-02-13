@@ -35,8 +35,8 @@ class MONITOpenSearchClient:
     def __init__(
         self,
         *,
+        url: str,
         token: Optional[str] = None,
-        url: str = "https://monit-grafana.cern.ch/api/datasources/proxy/9269/_msearch",
         default_index: Optional[str] = None,
         timeout: float = 60.0,
     ):
@@ -44,9 +44,9 @@ class MONITOpenSearchClient:
         Initialize the MONIT OpenSearch client.
         
         Args:
+            url: Full URL to the _msearch endpoint (required).
             token: Bearer token for MONIT Grafana API authentication.
                    If not provided, reads from MONIT_GRAFANA_TOKEN env var.
-            url: Full URL to the _msearch endpoint.
             default_index: Default index pattern for queries (optional).
             timeout: Request timeout in seconds.
         """
@@ -67,16 +67,16 @@ class MONITOpenSearchClient:
 
     def query(
         self,
-        es_query: Dict[str, Any],
+        query_dsl: Dict[str, Any],
         *,
         index: Optional[str] = None,
         search_type: str = "query_then_fetch",
     ) -> Dict[str, Any]:
         """
-        Execute an Elasticsearch query against MONIT.
+        Execute a query against MONIT OpenSearch.
         
         Args:
-            es_query: Elasticsearch Query DSL dictionary.
+            query_dsl: Query DSL dictionary (OpenSearch compatible).
             index: Index pattern (required if no default_index set).
             search_type: Search type for meta query.
             
@@ -99,7 +99,7 @@ class MONITOpenSearchClient:
         }
         
         # Format as NDJSON (newline-delimited JSON) for _msearch
-        payload = "\n".join([json.dumps(meta_query), json.dumps(es_query)]) + "\n"
+        payload = "\n".join([json.dumps(meta_query), json.dumps(query_dsl)]) + "\n"
         
         response = requests.post(
             self.url,
@@ -126,15 +126,15 @@ class MONITOpenSearchClient:
         Args:
             lucene_query: Lucene query string (e.g., 'data.name="/store/..."').
             index: Index pattern to query (required).
-            from_time: Start time in Elasticsearch date math.
-            to_time: End time in Elasticsearch date math.
+            from_time: Start time in OpenSearch date math.
+            to_time: End time in OpenSearch date math.
             time_field: Field to use for time range filtering.
             size: Maximum number of results to return.
             
         Returns:
             Raw JSON response from OpenSearch.
         """
-        es_query = {
+        query_dsl = {
             "size": size,
             "_source": True,
             "query": {
@@ -165,7 +165,7 @@ class MONITOpenSearchClient:
             ],
         }
         
-        return self.query(es_query, index=index)
+        return self.query(query_dsl, index=index)
 
     def get_index_fields(self, index: str, sample_size: int = 1) -> Dict[str, str]:
         """
@@ -179,14 +179,14 @@ class MONITOpenSearchClient:
             Dict mapping field paths to their types, e.g.:
             {"data.name": "str", "data.bytes": "int", "metadata.timestamp": "int"}
         """
-        es_query = {
+        query_dsl = {
             "size": sample_size,
             "_source": True,
             "query": {"match_all": {}},
         }
         
         try:
-            response = self.query(es_query, index=index)
+            response = self.query(query_dsl, index=index)
             responses = response.get("responses", [response])
             
             if responses and responses[0].get("hits", {}).get("hits"):
@@ -241,8 +241,8 @@ class MONITOpenSearchClient:
                      - 'max': Maximum value
                      - 'cardinality': Count unique values
             agg_size: Maximum number of buckets to return for terms aggregation.
-            from_time: Start time in Elasticsearch date math.
-            to_time: End time in Elasticsearch date math.
+            from_time: Start time in OpenSearch date math.
+            to_time: End time in OpenSearch date math.
             time_field: Field to use for time range filtering.
             
         Returns:
@@ -266,7 +266,7 @@ class MONITOpenSearchClient:
             raise ValueError(f"Unsupported aggregation type: {agg_type}. "
                            f"Supported: terms, sum, avg, min, max, cardinality")
         
-        es_query = {
+        query_dsl = {
             "size": 0,  # Don't return documents, just aggregations
             "query": {
                 "bool": {
@@ -296,7 +296,7 @@ class MONITOpenSearchClient:
             },
         }
         
-        return self.query(es_query, index=index)
+        return self.query(query_dsl, index=index)
 
 
 # =============================================================================
@@ -569,8 +569,8 @@ def _build_tool_description(
     lines.append("    field_name:value  (exact match)")
     lines.append("    field_name:*wildcard*  (wildcard search)")
     lines.append("    field_a:value AND field_b:value  (boolean)")
-    lines.append("- from_time: Start time (default: 'now-24h'). Supports ES date math.")
-    lines.append("- to_time: End time (default: 'now'). Supports ES date math.")
+    lines.append("- from_time: Start time (default: 'now-24h'). Supports date math (e.g., now-7d, now-24h).")
+    lines.append("- to_time: End time (default: 'now'). Supports date math (e.g., now-7d, now-24h).")
     lines.append(f"- max_results: Max documents to return (default: 10, max: {MAX_RESULTS_HARD_LIMIT}).")
     
     return "\n".join(lines)
@@ -580,7 +580,7 @@ def _build_tool_description(
 # LangChain Tool Factory
 # =============================================================================
 
-def create_monit_opensearch_tool(
+def create_monit_opensearch_search_tool(
     client: MONITOpenSearchClient,
     *,
     index_pattern: str,
@@ -633,8 +633,8 @@ def create_monit_opensearch_tool(
         
         Args:
             query: Lucene query string
-            from_time: Start time in ES date math (default: now-24h)
-            to_time: End time in ES date math (default: now)
+            from_time: Start time in date math (e.g., now-7d, now-24h) (default: now-24h)
+            to_time: End time in date math (e.g., now-7d, now-24h) (default: now)
             max_results_override: Override default max results
             
         Returns:
@@ -734,8 +734,8 @@ def _build_aggregation_tool_description(
     lines.append("    'min' / 'max' - Minimum/maximum value")
     lines.append("    'cardinality' - Count unique values")
     lines.append("- top_n: Number of top buckets for 'terms' aggregation (default: 10, max: 100).")
-    lines.append("- from_time: Start time (default: 'now-24h'). Supports ES date math.")
-    lines.append("- to_time: End time (default: 'now'). Supports ES date math.")
+    lines.append("- from_time: Start time (default: 'now-24h'). Supports date math (e.g., now-7d, now-24h).")
+    lines.append("- to_time: End time (default: 'now'). Supports date math (e.g., now-7d, now-24h).")
     
     lines.append("")
     lines.append("Example queries:")
@@ -806,8 +806,8 @@ def create_monit_opensearch_aggregation_tool(
             group_by: Field to aggregate on
             agg_type: Type of aggregation (terms, sum, avg, min, max, cardinality)
             top_n: Number of top buckets for terms aggregation
-            from_time: Start time in ES date math (default: now-24h)
-            to_time: End time in ES date math (default: now)
+            from_time: Start time in date math (e.g., now-7d, now-24h) (default: now-24h)
+            to_time: End time in date math (e.g., now-7d, now-24h) (default: now)
             
         Returns:
             Formatted string with aggregation results.
@@ -875,6 +875,6 @@ def create_monit_opensearch_aggregation_tool(
 
 __all__ = [
     "MONITOpenSearchClient",
-    "create_monit_opensearch_tool",
+    "create_monit_opensearch_search_tool",
     "create_monit_opensearch_aggregation_tool",
 ]

@@ -17,7 +17,7 @@ from src.archi.pipelines.agents.tools import (
     create_retriever_tool,
     RemoteCatalogClient,
     MONITOpenSearchClient,
-    create_monit_opensearch_tool,
+    create_monit_opensearch_search_tool,
     create_monit_opensearch_aggregation_tool,
 )
 from src.archi.pipelines.agents.utils.history_utils import infer_speaker
@@ -117,34 +117,35 @@ class CMSCompOpsAgent(BaseReActAgent):
 
         # MONIT OpenSearch tools for querying various indices
         monit_token = read_secret("MONIT_GRAFANA_TOKEN")
+        monit_url = "https://monit-grafana.cern.ch/api/datasources/proxy/9269/_msearch"
         if monit_token:
             try:
-                monit_client = MONITOpenSearchClient(token=monit_token)
+                monit_client = MONITOpenSearchClient(url=monit_url, token=monit_token)
                 
-                # Load skill for Rucio transfers
-                rucio_skill = _load_skill("rucio_transfers", self.config)
+                # Load skill for Rucio events monitoring
+                rucio_events_skill = _load_skill("rucio_events", self.config)
                 
-                # Rucio search tool (for fetching individual events)
-                rucio_tool = create_monit_opensearch_tool(
+                # Rucio events search tool (for fetching individual events)
+                rucio_events_search_tool = create_monit_opensearch_search_tool(
                     monit_client,
                     name="search_rucio_events",
                     index_pattern="monit_prod_cms_rucio_raw_events*",
                     index_description="CMS Rucio events (transfers, deletions, rules, datasets). Use for fetching individual event details.",
-                    skill=rucio_skill,
+                    skill=rucio_events_skill,
                 )
-                all_tools.append(rucio_tool)
-                logger.info("MONIT Rucio search tool initialized successfully")
+                all_tools.append(rucio_events_search_tool)
+                logger.info("Rucio events search tool initialized")
                 
-                # Rucio aggregation tool (for counting, grouping, statistics)
-                rucio_agg_tool = create_monit_opensearch_aggregation_tool(
+                # Rucio events aggregation tool (for counting, grouping, statistics)
+                rucio_events_agg_tool = create_monit_opensearch_aggregation_tool(
                     monit_client,
                     name="aggregate_rucio_events",
                     index_pattern="monit_prod_cms_rucio_raw_events*",
                     index_description="Aggregate CMS Rucio events. Use for questions like 'top errors', 'count by RSE', 'total bytes'.",
-                    skill=rucio_skill,
+                    skill=rucio_events_skill,
                 )
-                all_tools.append(rucio_agg_tool)
-                logger.info("MONIT Rucio aggregation tool initialized successfully")
+                all_tools.append(rucio_events_agg_tool)
+                logger.info("Rucio events aggregation tool initialized")
                 
             except Exception as e:
                 logger.warning(f"Failed to initialize MONIT OpenSearch tools: {e}")
@@ -152,18 +153,6 @@ class CMSCompOpsAgent(BaseReActAgent):
             logger.info("MONIT_GRAFANA_TOKEN not found; MONIT OpenSearch tools not available")
 
         return all_tools
-
-    # def _build_static_middleware(self) -> List[Callable]:
-    #     """
-    #     Initialize middleware: currently, testing what works best.
-    #     This is static.
-    #     """
-    #     todolist_middleware = TodoListMiddleware()
-    #     llmtoolselector_middleware = LLMToolSelectorMiddleware(
-    #         model=self.agent_llm,
-    #         max_tools=3,
-    #     )
-    #     return [todolist_middleware, llmtoolselector_middleware]
 
     def _store_documents(self, stage: str, docs: Sequence[Document]) -> None:
         """Centralised helper used by tools to record documents into the active memory."""
