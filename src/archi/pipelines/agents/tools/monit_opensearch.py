@@ -331,7 +331,6 @@ def _format_value(value: Any, max_length: int = 80) -> str:
 def _format_hit_generic(
     hit: Dict[str, Any],
     idx: int,
-    key_fields: Optional[List[str]] = None,
 ) -> str:
     """
     Format any OpenSearch hit generically.
@@ -339,7 +338,6 @@ def _format_hit_generic(
     Args:
         hit: The OpenSearch hit document.
         idx: Index number for display.
-        key_fields: Optional list of field paths to highlight at the top.
         
     Returns:
         Formatted string representation of the hit.
@@ -363,23 +361,11 @@ def _format_hit_generic(
     lines = [f"[{idx}] Document (score: {hit.get('_score', 'N/A')})"]
     lines.append("    " + "─" * 50)
     
-    # Show key fields first (if specified)
-    shown_fields = set()
-    if key_fields:
-        lines.append("    Key fields:")
-        for field in key_fields:
-            if field in flat:
-                value = _format_value(flat[field])
-                lines.append(f"      {field}: {value}")
-                shown_fields.add(field)
-        lines.append("")
-    
-    # Show remaining fields
-    remaining = {k: v for k, v in flat.items() if k not in shown_fields}
-    if remaining:
-        lines.append("    All fields:")
-        for key in sorted(remaining.keys()):
-            value = _format_value(remaining[key])
+    # Show all fields sorted alphabetically
+    if flat:
+        lines.append("    Fields:")
+        for key in sorted(flat.keys()):
+            value = _format_value(flat[key])
             lines.append(f"      {key}: {value}")
     
     return "\n".join(lines)
@@ -390,7 +376,6 @@ def _format_opensearch_response(
     query: str,
     index_pattern: str,
     max_results: int,
-    key_fields: Optional[List[str]] = None,
     from_time: str = "now-24h",
     to_time: str = "now",
 ) -> str:
@@ -402,7 +387,6 @@ def _format_opensearch_response(
         query: The original query string.
         index_pattern: The index pattern queried.
         max_results: Maximum results to display.
-        key_fields: Optional list of field paths to highlight.
         from_time: Start time used for the query.
         to_time: End time used for the query.
         
@@ -449,7 +433,7 @@ def _format_opensearch_response(
     
     # Format each hit
     for idx, hit in enumerate(hits[:max_results], start=1):
-        lines.append(_format_hit_generic(hit, idx, key_fields))
+        lines.append(_format_hit_generic(hit, idx))
         lines.append("")
     
     return "\n".join(lines)
@@ -561,7 +545,6 @@ def _format_aggregation_response(
 def _build_tool_description(
     index_pattern: str,
     index_description: str,
-    key_fields: Optional[List[str]] = None,
 ) -> str:
     """
     Build tool description dynamically based on index configuration.
@@ -569,7 +552,6 @@ def _build_tool_description(
     Args:
         index_pattern: The OpenSearch index pattern.
         index_description: Human-readable description of what the index contains.
-        key_fields: Optional list of key field paths for query hints.
         
     Returns:
         Tool description string.
@@ -591,11 +573,6 @@ def _build_tool_description(
     lines.append("- to_time: End time (default: 'now'). Supports ES date math.")
     lines.append(f"- max_results: Max documents to return (default: 10, max: {MAX_RESULTS_HARD_LIMIT}).")
     
-    if key_fields:
-        lines.append("")
-        lines.append(f"Key fields in this index: {', '.join(key_fields)}")
-        lines.append("Use these in queries like: field_name:value")
-    
     return "\n".join(lines)
 
 
@@ -609,11 +586,9 @@ def create_monit_opensearch_tool(
     index_pattern: str,
     name: str = "search_opensearch",
     index_description: str = "",
-    key_fields: Optional[List[str]] = None,
     time_field: str = "metadata.timestamp",
     description: Optional[str] = None,
     max_results: int = 10,
-    auto_discover_fields: bool = False,
     skill: Optional[str] = None,
 ) -> Callable[..., str]:
     """
@@ -627,35 +602,19 @@ def create_monit_opensearch_tool(
         index_pattern: The OpenSearch index pattern to query (required).
         name: Tool name for LangChain.
         index_description: Human-readable description of what the index contains.
-        key_fields: List of important field paths to highlight in output.
-                   If None and auto_discover_fields is True, fields are discovered.
         time_field: Field to use for time range filtering.
         description: Full tool description (overrides auto-generated if provided).
         max_results: Default maximum results to return.
-        auto_discover_fields: If True and key_fields is None, discover fields from index.
         skill: Optional markdown content with domain expertise for this tool.
-               Appended to tool description to help the LLM construct better queries.
+               Provides field documentation and query guidance to the LLM.
         
     Returns:
         LangChain tool function.
     """
-    # Optionally discover fields from index
-    effective_key_fields = key_fields
-    if effective_key_fields is None and auto_discover_fields:
-        try:
-            discovered = client.get_index_fields(index_pattern)
-            # Take first 10 fields as key fields
-            effective_key_fields = list(discovered.keys())[:10]
-            logger.info("Discovered %d fields from index %s", len(discovered), index_pattern)
-        except Exception as e:
-            logger.warning("Field discovery failed for %s: %s", index_pattern, e)
-            effective_key_fields = None
-    
     # Build tool description
     tool_description = description or _build_tool_description(
         index_pattern=index_pattern,
         index_description=index_description,
-        key_fields=effective_key_fields,
     )
     
     # Append skill content if provided
@@ -707,7 +666,6 @@ def create_monit_opensearch_tool(
                 query=query.strip(),
                 index_pattern=index_pattern,
                 max_results=effective_max,
-                key_fields=effective_key_fields,
                 from_time=from_time,
                 to_time=to_time,
             )
@@ -746,7 +704,6 @@ def create_monit_opensearch_tool(
 def _build_aggregation_tool_description(
     index_pattern: str,
     index_description: str,
-    key_fields: Optional[List[str]] = None,
 ) -> str:
     """
     Build tool description for the aggregation tool.
@@ -754,7 +711,6 @@ def _build_aggregation_tool_description(
     Args:
         index_pattern: The OpenSearch index pattern.
         index_description: Human-readable description of what the index contains.
-        key_fields: Optional list of key field paths for aggregation hints.
         
     Returns:
         Tool description string.
@@ -781,12 +737,6 @@ def _build_aggregation_tool_description(
     lines.append("- from_time: Start time (default: 'now-24h'). Supports ES date math.")
     lines.append("- to_time: End time (default: 'now'). Supports ES date math.")
     
-    if key_fields:
-        lines.append("")
-        lines.append("Common fields to aggregate on:")
-        for field in key_fields:
-            lines.append(f"  - {field}")
-    
     lines.append("")
     lines.append("Example queries:")
     lines.append("- 'What are the top transfer errors?' -> query='data.event_type:transfer-failed', group_by='data.reason', agg_type='terms'")
@@ -806,7 +756,6 @@ def create_monit_opensearch_aggregation_tool(
     index_pattern: str,
     name: str = "aggregate_opensearch",
     index_description: str = "",
-    key_fields: Optional[List[str]] = None,
     time_field: str = "metadata.timestamp",
     description: Optional[str] = None,
     skill: Optional[str] = None,
@@ -822,10 +771,10 @@ def create_monit_opensearch_aggregation_tool(
         index_pattern: The OpenSearch index pattern to query (required).
         name: Tool name for LangChain.
         index_description: Human-readable description of what the index contains.
-        key_fields: List of common fields to aggregate on.
         time_field: Field to use for time range filtering.
         description: Full tool description (overrides auto-generated if provided).
         skill: Optional markdown content with domain expertise for this tool.
+               Provides field documentation and query guidance to the LLM.
         
     Returns:
         LangChain tool function.
@@ -834,7 +783,6 @@ def create_monit_opensearch_aggregation_tool(
     tool_description = description or _build_aggregation_tool_description(
         index_pattern=index_pattern,
         index_description=index_description,
-        key_fields=key_fields,
     )
     
     # Append skill content if provided

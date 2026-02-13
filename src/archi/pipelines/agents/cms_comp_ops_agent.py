@@ -124,25 +124,12 @@ class CMSCompOpsAgent(BaseReActAgent):
                 # Load skill for Rucio transfers
                 rucio_skill = _load_skill("rucio_transfers", self.config)
                 
-                # Rucio transfer events tool
                 # Rucio search tool (for fetching individual events)
                 rucio_tool = create_monit_opensearch_tool(
                     monit_client,
                     name="search_rucio_events",
                     index_pattern="monit_prod_cms_rucio_raw_events*",
                     index_description="CMS Rucio events (transfers, deletions, rules, datasets). Use for fetching individual event details.",
-                    key_fields=[
-                        "data.event_type",
-                        "data.name",
-                        "data.src_rse",
-                        "data.dst_rse",
-                        "data.rse",
-                        "data.reason",
-                        "data.transfer_id",
-                        "data.request_id",
-                        "data.bytes",
-                        "data.activity",
-                    ],
                     skill=rucio_skill,
                 )
                 all_tools.append(rucio_tool)
@@ -154,15 +141,6 @@ class CMSCompOpsAgent(BaseReActAgent):
                     name="aggregate_rucio_events",
                     index_pattern="monit_prod_cms_rucio_raw_events*",
                     index_description="Aggregate CMS Rucio events. Use for questions like 'top errors', 'count by RSE', 'total bytes'.",
-                    key_fields=[
-                        "data.event_type",
-                        "data.reason",
-                        "data.src_rse",
-                        "data.dst_rse",
-                        "data.rse",
-                        "data.activity",
-                        "data.state",
-                    ],
                     skill=rucio_skill,
                 )
                 all_tools.append(rucio_agg_tool)
