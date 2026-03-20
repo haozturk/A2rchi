@@ -66,7 +66,7 @@ from src.interfaces.chat_app.service_alerts import (
     register_service_alerts, get_active_banner_alerts, is_alert_manager,
 )
 from src.interfaces.chat_app.utils import collapse_assistant_sequences
-from src.utils.user_service import UserService
+from src.utils.user_service import UserService, anonymize_user_id
 
 # RBAC imports for role-based access control
 from src.utils.rbac import (
@@ -2382,6 +2382,7 @@ class FlaskAppWrapper(object):
                     email=username,
                     name=username,
                     username=username,
+                    user_id=anonymize_user_id(username),
                     auth_method='basic',
                     roles=[]
                 )
@@ -2443,7 +2444,8 @@ class FlaskAppWrapper(object):
             
             # Upsert the SSO user into the users table so that conversation_metadata
             # can reference user_id via the FK constraint.
-            sso_user_id = user_info.get('sub', '')
+            # Anonymize the raw identity-provider subject ID before storage.
+            sso_user_id = anonymize_user_id(user_info.get('sub', ''))
             if sso_user_id:
                 try:
                     user_service = UserService(pg_config=self.pg_config)

@@ -19,6 +19,7 @@ from src.utils.postgres_service_factory import PostgresServiceFactory
 from src.utils.env import read_secret
 from src.utils.logging import get_logger
 from src.utils.config_access import get_full_config
+from src.utils.user_service import anonymize_user_id
 from src.archi.pipelines.agents.agent_spec import AgentSpecError, load_agent_spec
 
 logger = get_logger(__name__)
@@ -115,24 +116,26 @@ def get_services() -> PostgresServiceFactory:
 
 
 def get_client_id() -> str:
-    """Get client ID from request (session, header, or generate)."""
-    # Check session first
+    """Get client ID from request (session, header, or generate).
+    
+    Explicit client IDs from headers or JSON body are anonymized via
+    ``anonymize_user_id`` so that raw identifiers are never stored.
+    Session-based IDs are returned as-is because they were already
+    anonymized when the session was created.
+    """
     from flask import session
     if 'client_id' in session:
         return session['client_id']
     
-    # Check header
     client_id = request.headers.get('X-Client-ID')
     if client_id:
-        return client_id
+        return anonymize_user_id(client_id)
     
-    # Check JSON body
     if request.is_json and request.json:
         client_id = request.json.get('client_id')
         if client_id:
-            return client_id
+            return anonymize_user_id(client_id)
     
-    # Generate anonymous client ID from request
     import hashlib
     import uuid
     user_agent = request.headers.get('User-Agent', '')

@@ -25,6 +25,24 @@ logger = get_logger(__name__)
 # Supported auth providers
 AUTH_PROVIDERS = ("anonymous", "basic", "sso")
 
+# Fixed namespace for deterministic user ID anonymization.
+# Changing this would invalidate all previously anonymized user IDs.
+_USER_ID_NAMESPACE = uuid.UUID('8b1a9953-c361-5080-ba6e-5de95a1e40d3')
+
+
+def anonymize_user_id(raw_user_id: str) -> str:
+    """
+    Convert a raw user ID (e.g. SSO subject, username) into a deterministic
+    UUID string so that the stored identifier cannot be traced back to the
+    original identity.
+
+    Uses uuid5 (SHA-1 based) with a fixed namespace to ensure the same input
+    always produces the same output.
+    """
+    if not raw_user_id:
+        return raw_user_id
+    return str(uuid.uuid5(_USER_ID_NAMESPACE, raw_user_id))
+
 # Supported API key providers for BYOK
 BYOK_PROVIDERS = ("openrouter", "openai", "anthropic")
 
