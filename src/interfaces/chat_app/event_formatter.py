@@ -55,6 +55,7 @@ class PipelineEventFormatter:
         self._emitted_start_ids: set[str] = set()   # ids we've yielded tool_start for
         self._pending_ids: list[str] = []            # ids awaiting their output (ordered)
         self._calls: Dict[str, Dict[str, Any]] = {}  # id → {tool_name, tool_args}
+        self._playbook_output_ids: set[str] = set()  # ids surfaced as playbook_applied, not tool steps
         self._synthetic_counter: int = 0
 
         # Public counters for callers
@@ -235,10 +236,32 @@ class PipelineEventFormatter:
         tool_output = self._message_content(msg) if msg else ""
         tc_id = getattr(msg, "tool_call_id", "") if msg else ""
 
+        # A content_and_artifact tool (the Playbook loader) rides a small dict on the
+        # ToolMessage the model never sees, carrying which playbook resolved.
+        artifact = getattr(msg, "artifact", None) if msg else None
+        playbook_name = artifact.get("playbook_name") if isinstance(artifact, dict) else None
+
         if not tc_id and self._pending_ids:
             tc_id = self._pending_ids.pop(0)
         elif tc_id in self._pending_ids:
             self._pending_ids.remove(tc_id)
+
+        # The Playbook loader is not shown as a generic tool call. It's surfaced as a
+        # distinct "playbook applied" step — the same activity marker a /name invocation
+        # emits — so the trace explains WHY the downstream tools ran. Suppress this id's
+        # tool_start/tool_output/tool_end (see _on_tool_end) in favour of that one event.
+        if playbook_name:
+            self._playbook_output_ids.add(tc_id)
+            self._emitted_start_ids.add(tc_id)
+            # `tool_output` is the loaded playbook body — carry it so the step is
+            # expandable (parity with the tool row it replaces, which showed the body).
+            yield {
+                "type": "playbook_applied",
+                "name": playbook_name,
+                "tool_call_id": tc_id,
+                "body": tool_output,
+            }
+            return
 
         # Emit deferred tool_start if not yet sent
         if tc_id and tc_id not in self._emitted_start_ids:
@@ -271,6 +294,10 @@ class PipelineEventFormatter:
         yield evt
 
     def _on_tool_end(self, _output: PipelineOutput, meta: dict) -> Iterator[Dict[str, Any]]:
+        # A playbook-loader call was surfaced as a playbook_applied step, not a tool
+        # step, so it has no tool_end to render.
+        if meta.get("tool_call_id", "") in self._playbook_output_ids:
+            return
         yield {
             "type": "tool_end",
             "tool_call_id": meta.get("tool_call_id", ""),

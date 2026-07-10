@@ -3336,6 +3336,53 @@ const UI = {
   // Tool Step Rendering (Timeline Style)
   // =========================================================================
 
+  // A Playbook tool call carries the resolved playbook name (via the tool artifact),
+  // so the activity row reads "Playbook · <name>" instead of a bare, arg-less "Playbook".
+  toolStepLabel(event) {
+    if (event.playbook_name) return `Playbook · ${event.playbook_name}`;
+    return event.tool_name || '';
+  },
+
+  // A distinct activity step for the playbook that shaped this turn — shown for BOTH
+  // the /name path (body injected server-side, no tool call) and auto-pickup (the
+  // Playbook loader, surfaced here instead of as a generic tool row). Styled apart from
+  // tool steps and NOT counted as a tool: it explains WHY the tools below it ran.
+  renderPlaybookApplied(messageId, event) {
+    this.createTraceContainer(messageId);  // no-op if it already exists
+    const timeline = document.querySelector(`.trace-container[data-message-id="${messageId}"] .step-timeline`);
+    if (!timeline || !event.name) return;
+    // Key on the playbook name, not the tool_call_id: a /name turn emits one applied
+    // step server-side (no id) AND, if the model redundantly re-loads the same playbook,
+    // another via the tool (with an id). Same playbook → one step.
+    const stepId = `playbook-${event.name}`;
+    const stepIdAttr = Utils.escapeAttr(stepId);
+    if (timeline.querySelector(`[data-step-id="${stepIdAttr}"]`)) return;  // dedupe
+    // The body (the loaded playbook text) makes the step expandable — same detail the
+    // tool row used to show. Absent it, render a plain, non-clickable pill.
+    const body = event.body != null ? String(event.body).trim() : '';
+    const onclick = body ? ` onclick="UI.toggleStepExpanded('${stepIdAttr}')"` : '';
+    const toggle = body ? '<button class="step-toggle" aria-label="Expand playbook details">&#9654;</button>' : '';
+    const details = body ? `
+          <div class="step-details" style="display: none;">
+            <div class="section-label">Playbook</div>
+            <pre><code>${Utils.escapeHtml(body)}</code></pre>
+          </div>` : '';
+    timeline.insertAdjacentHTML('beforeend', `
+      <div class="step playbook-step" data-step-id="${stepIdAttr}">
+        <div class="step-connector">
+          <span class="step-marker playbook-marker"></span>
+          <div class="step-line"></div>
+        </div>
+        <div class="step-content">
+          <div class="step-header"${onclick}>
+            <span class="step-icon playbook-icon-glyph" aria-hidden="true">📘</span>
+            <span class="step-label">Playbook applied · ${Utils.escapeHtml(event.name)}</span>
+            ${toggle}
+          </div>${details}
+        </div>
+      </div>`);
+  },
+
   renderToolStart(messageId, event) {
     const timeline = document.querySelector(`.trace-container[data-message-id="${messageId}"] .step-timeline`);
     if (!timeline) return;
@@ -3343,8 +3390,8 @@ const UI = {
     const existingStep = timeline.querySelector(`[data-tool-call-id="${event.tool_call_id}"]`);
     if (existingStep) {
       const labelEl = existingStep.querySelector('.step-label');
-      if (labelEl && event.tool_name) {
-        labelEl.textContent = event.tool_name;
+      if (labelEl && (event.tool_name || event.playbook_name)) {
+        labelEl.textContent = this.toolStepLabel(event);
       }
       const argsCode = existingStep.querySelector('.tool-args pre code');
       if (argsCode) {
@@ -3361,8 +3408,8 @@ const UI = {
         </div>
         <div class="step-content">
           <div class="step-header" onclick="UI.toggleStepExpanded('${Utils.escapeAttr(event.tool_call_id)}')">
-            <span class="step-icon tool-icon-glyph">T</span>
-            <span class="step-label">${Utils.escapeHtml(event.tool_name)}</span>
+            <span class="step-icon tool-icon-glyph">${event.playbook_name ? '📘' : 'T'}</span>
+            <span class="step-label">${Utils.escapeHtml(this.toolStepLabel(event))}</span>
             <span class="step-status">
               <span class="spinner"></span>
             </span>
@@ -5116,6 +5163,9 @@ const Chat = {
     const showTrace = UI.isTraceVisibleMode(UI.getTraceModeForMessage(messageId));
     if (!showTrace) return;
     switch (event.type) {
+      case 'playbook_applied':
+        UI.renderPlaybookApplied(messageId, event);
+        break;
       case 'tool_start':
         UI.renderToolStart(messageId, event);
         break;
@@ -5210,6 +5260,9 @@ const Chat = {
           this.state.activeTrace.events.push(event);
           this._renderStreamEvent(messageId, event);
         } else if (event.type === 'thinking_start' || event.type === 'thinking_end') {
+          this.state.activeTrace.events.push(event);
+          this._renderStreamEvent(messageId, event);
+        } else if (event.type === 'playbook_applied') {
           this.state.activeTrace.events.push(event);
           this._renderStreamEvent(messageId, event);
         } else if (event.type === 'chunk') {

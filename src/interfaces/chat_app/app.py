@@ -3553,6 +3553,13 @@ class FlaskAppWrapper(object):
         def _event_stream() -> Iterator[str]:
             padding = " " * 2048
             yield json.dumps({"type": "meta", "event": "stream_started", "padding": padding}) + "\n"
+            # Same as the main stream: a /name-invoked playbook (its body injected
+            # server-side) is surfaced as an applied-playbook step up front. Only fires
+            # when a playbook was staged for this request (A/B chat), else no-op.
+            _pending = get_pending_playbook()
+            if _pending and _pending.get("name"):
+                yield json.dumps({"type": "playbook_applied", "name": _pending["name"],
+                                  "body": _pending.get("body", "")}) + "\n"
             for event in event_iter:
                 yield json.dumps(event, default=str) + "\n"
 
@@ -4745,6 +4752,12 @@ class FlaskAppWrapper(object):
         def _event_stream() -> Iterator[str]:
             padding = " " * 2048
             yield json.dumps({"type": "meta", "event": "stream_started", "padding": padding}) + "\n"
+            # A /name-invoked playbook has its body injected server-side (no Playbook tool
+            # call to surface), so emit the applied-playbook activity step up front here.
+            _pending = get_pending_playbook()
+            if _pending and _pending.get("name"):
+                yield json.dumps({"type": "playbook_applied", "name": _pending["name"],
+                                  "body": _pending.get("body", "")}) + "\n"
             for event in self.chat.stream(
                 message,
                 conversation_id,
